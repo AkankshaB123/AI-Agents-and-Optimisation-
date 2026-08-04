@@ -1,0 +1,134 @@
+{
+  "name": "Tele-Sales Voice Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Tele-Sales Call",
+        "formDescription": "Provide the customer details and product to pitch.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Customer Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Phone Number",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Product Name",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7763c35d-112a-40f4-906b-f740bf9fe202",
+      "name": "Sales Call Request",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "542054c6-201a-4ebb-a42e-f9f17b481263"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert tele-sales agent writing a short spoken script that will be read aloud over a phone call by a text-to-speech voice. Write ONLY the words to be spoken, in a warm, natural, persuasive tone. Address the customer by name, briefly introduce the product, give 2-3 compelling reasons to buy, and end with a clear call to action to purchase. Keep it under 120 words. Do not include stage directions, labels, or markdown."
+            },
+            {
+              "content": "=Customer name: {{ $json[\"Customer Name\"] }}\nProduct to sell: {{ $json[\"Product Name\"] }}\nWrite the phone sales script now."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "dcdd6eaa-13f7-4b05-9428-4c6aaebd1ad7",
+      "name": "Generate Sales Script",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        224,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "lTfvYPTz02XMdkP4",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "call",
+        "from": "+19015893130",
+        "to": "={{ $(\"Sales Call Request\").item.json[\"Phone Number\"] }}",
+        "message": "={{ $json.output[0].content[0].text }}",
+        "options": {}
+      },
+      "id": "a9a0f933-f53f-4b5d-961f-ac945859dd0d",
+      "name": "Place Sales Call",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "oZYnxVImMTsikHOP",
+          "name": "Twilio account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Sales Call Request": {
+      "main": [
+        [
+          {
+            "node": "Generate Sales Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Sales Script": {
+      "main": [
+        [
+          {
+            "node": "Place Sales Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "be8a2ca6-feec-450e-aca1-47481628e6df",
+  "meta": {
+    "instanceId": "f9107edfdabf902188f9741b03743f2aa559c09963500c78209726ab23092cef"
+  },
+  "nodeGroups": [],
+  "id": "otejzBJN6T91bHaR",
+  "tags": []
+}
