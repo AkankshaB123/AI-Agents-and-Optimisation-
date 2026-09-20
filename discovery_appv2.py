@@ -145,7 +145,8 @@ Tool Triggering Rules:
 - Self-Correction: If `search_shopify_stores` returns 0 items, reflect on why it failed. 
   1. Try dropping strict brand/price constraints in a second tool call.
   2. Search alternative store domains.
-  3. Only explain the failure to the user if 2+ query attempts yield zero results.
+  3. Only explain the failure to the user if 1+ query attempts yield zero results.
+- Batch independent tool calls together and avoid unnecessary searches.
 """
 
 tools = [
