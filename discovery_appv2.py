@@ -141,6 +141,11 @@ Ambiguity & Confidence Rules:
 Tool Triggering Rules:
 - Invoke `search_shopify_dynamic` ONLY when the user expresses clear intent for a concrete product category or type.
 - Clean the `prompt` parameter: strip out conversational filler and supply core query keywords along with any explicit category/gender modifiers.
+
+- Self-Correction: If `search_shopify_stores` returns 0 items, reflect on why it failed. 
+  1. Try dropping strict brand/price constraints in a second tool call.
+  2. Search alternative store domains.
+  3. Only explain the failure to the user if 2+ query attempts yield zero results.
 """
 
 tools = [
