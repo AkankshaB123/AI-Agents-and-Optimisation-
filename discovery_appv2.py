@@ -74,7 +74,7 @@ def compute_embeddings(text_list: list) -> torch.Tensor:
 
 
 def filter_by_cosine_similarity(
-    query: str, products: list, threshold: float = 0.85
+    query: str, products: list, threshold: float = 0.50
 ) -> list:
     """Calculates cosine similarity between user query and retrieved product metadata.
     Filters products with similarity score < threshold.
