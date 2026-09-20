@@ -642,9 +642,3 @@ else:
     st.write(
         "To start a new session, re-open/refresh the Streamlit link or click **'Start New Session'** in the sidebar."
     )
-
-"""1. Perform cosing similarity score of the retrieved results and user's query (Retrieval/Shortlist + Re-rank)
-2. Create a table store these results daily and delete it
-* LTR
-"""
-
