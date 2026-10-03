@@ -172,7 +172,7 @@ Compatibility launchers named `discovery_appv2.py` remain at the repository root
 
 Build the image with `docker build -t discovery-assistant .`, then start it with `docker run --rm -p 8501:8501 -e HF_TOKEN="$HF_TOKEN" discovery-assistant`. Open `http://localhost:8501`.
 
-For deployment, pull the published image `ghcr.io/<owner>/<repository>:<tag>` into your container platform and inject `HF_TOKEN` through that platform's secret manager. Do not put tokens in the image or commit them to the repository.
+For deployment, pull the published image `ghcr.io/akankshab123/discovery-agent:<tag>` into your container platform and inject `HF_TOKEN` through that platform's secret manager. Do not put tokens in the image or commit them to the repository.
 
 ## What Google offers
 
