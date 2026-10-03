@@ -111,6 +111,109 @@ def test_aggregates_configured_marketplaces_fairly(monkeypatch):
     ]
 
 
+def test_llm_selected_provider_limits_search_to_that_provider(monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "catalog-project")
+    monkeypatch.setattr(
+        product_search,
+        "search_shopify_catalog",
+        lambda *_: (_ for _ in ()).throw(AssertionError("Shopify should not run")),
+    )
+    monkeypatch.setattr(
+        product_search,
+        "search_google",
+        lambda *_, **__: [{"title": "Owned catalog item", "source": "Google"}],
+    )
+
+    products = product_search.search_shopify_dynamic(
+        "product in our catalog", providers=["Google"]
+    )
+
+    assert products == [{"title": "Owned catalog item", "source": "Google"}]
+
+
+def test_google_search_is_only_enabled_with_project_configured(monkeypatch):
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    assert product_search.get_enabled_providers() == ["Shopify"]
+
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "retail-catalog-project")
+    assert product_search.get_enabled_providers() == ["Shopify", "Google"]
+
+
+def test_llm_search_tool_requires_enabled_provider_selection():
+    tool = product_search.build_search_tool(["Shopify", "eBay", "Google"])
+    parameters = tool["function"]["parameters"]
+
+    assert parameters["required"] == ["prompt", "providers"]
+    assert parameters["properties"]["providers"]["items"]["enum"] == [
+        "Shopify",
+        "eBay",
+        "Google",
+    ]
+
+
+def test_normalizes_google_owned_catalog_results_and_budget():
+    payload = {
+        "results": [
+            {
+                "product": {
+                    "title": "Organic cotton sweater",
+                    "uri": "https://store.example/products/sweater",
+                    "description": "A soft sweater from our inventory.",
+                    "brands": ["Example Brand"],
+                    "availability": "IN_STOCK",
+                    "priceInfo": {"price": 72, "currencyCode": "USD"},
+                    "images": [{"uri": "https://cdn.example/sweater.jpg"}],
+                }
+            },
+            {
+                "product": {
+                    "title": "Expensive sweater",
+                    "uri": "https://store.example/products/expensive",
+                    "priceInfo": {"price": 220, "currencyCode": "USD"},
+                }
+            },
+        ]
+    }
+
+    products = product_search._normalize_google_results(payload, max_price=100)
+
+    assert products == [
+        {
+            "title": "Organic cotton sweater",
+            "price": "USD 72",
+            "brand": "Example Brand · Google",
+            "availability": "In Stock",
+            "description": "A soft sweater from our inventory.",
+            "url": "https://store.example/products/sweater",
+            "image_url": "https://cdn.example/sweater.jpg",
+            "source": "Google",
+        }
+    ]
+
+
+def test_builds_google_search_request_with_budget_and_session_visitor():
+    url, body = product_search._build_google_search_request(
+        project="retail-project",
+        location="global",
+        catalog="default_catalog",
+        serving_config="default_search",
+        prompt="warm winter coat",
+        max_price=125.5,
+        visitor_id="anonymous-session-id",
+    )
+
+    assert url == (
+        "https://retail.googleapis.com/v2/projects/retail-project/locations/global/"
+        "catalogs/default_catalog/servingConfigs/default_search:search"
+    )
+    assert body == {
+        "query": "warm winter coat",
+        "pageSize": 6,
+        "visitorId": "anonymous-session-id",
+        "filter": 'availability: ANY("IN_STOCK") AND price: IN(*, 125.5i)',
+    }
+
+
 def test_gets_and_caches_ebay_application_token(monkeypatch):
     product_search._token_cache.clear()
     monkeypatch.setenv("EBAY_CLIENT_ID", "test-client")

@@ -2,12 +2,17 @@
 
 import json
 import os
+import uuid
 from html import escape
 
 import streamlit as st
 from openai import OpenAI
 
-from src.product_search import search_shopify_dynamic
+from src.product_search import (
+    build_search_tool,
+    get_enabled_providers,
+    search_shopify_dynamic,
+)
 
 
 st.set_page_config(
@@ -27,45 +32,24 @@ EXIT_INTENTS = [
     "close",
 ]
 
-SYSTEM_PROMPT = """You are an expert personal shopping assistant searching connected commerce catalogs.
+SYSTEM_PROMPT = """You are an expert personal shopping assistant routing natural-language product searches to connected catalogs.
 
 Search naturally:
 - Accept conversational product requests and preserve the shopper's stated preferences, budget, use case, style, gender, and brand in the search prompt.
 - When a clear maximum budget is provided, pass it as `max_price` so the catalog applies a hard price filter in the configured currency.
-- Do NOT require the shopper to choose a category, brand, or structured filter. Send their full natural-language product request to `search_shopify_dynamic`.
-- Search across connected providers (Shopify, and optionally eBay and Amazon). Never claim a provider is connected unless results are returned from it, and never imply these catalogs include every merchant on the internet.
+- Do NOT require the shopper to choose a category, brand, marketplace, or structured filter.
+- Select `providers` based on explicit marketplace intent and query meaning. If the shopper explicitly says eBay or Amazon, prefer only that provider. Use eBay for used/auction/listing intent. Use Amazon for Amazon-specific shopping/Associate product intent. Use Shopify for broad cross-merchant Shopify discovery. Use Google only for searches expected to match the configured retailer-owned Google catalog, never as a public Google Shopping search.
+- If the shopper explicitly requests a marketplace that is not in the available-provider list, explain that it is not configured and ask before searching a different provider.
+- For general requests without a marketplace preference, search relevant connected providers; avoid selecting providers unrelated to the request.
+- Available providers for this session: {enabled_providers}.
+- Never claim a provider is connected unless it appears in the available-provider list; never imply these catalogs include every merchant on the internet.
 - Ask a follow-up only when the request is too ambiguous to identify a useful search, not merely because a category or filter is missing.
 - Do not invent product facts, prices, stock, or merchant details; rely on catalog results.
 
 Tool rules:
 - Invoke `search_shopify_dynamic` for requests to find or compare products.
-- Pass a concise but faithful natural-language search phrase that retains useful constraints. Extract an explicit maximum budget into `max_price`; do not invent a budget. The catalog applies availability filtering and uses the configured market context.
+- Pass a concise but faithful natural-language search phrase that retains useful constraints. Extract an explicit maximum budget into `max_price`; do not invent a budget. Include one or more provider names from the available-provider list.
 """
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_shopify_dynamic",
-            "description": "Searches connected product catalogs (Shopify Global Catalog, and eBay/Amazon when configured) using the shopper's natural-language request. No category or structured filters are required.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "The shopper's natural-language product request, preserving preferences such as budget, intended use, style, gender, or brand when provided.",
-                    },
-                    "max_price": {
-                        "type": "number",
-                        "description": "Optional maximum price in the configured catalog currency, only when the shopper explicitly stated a budget cap.",
-                    },
-                },
-                "required": ["prompt"],
-            },
-        },
-    }
-]
-
 
 def display_carousel_html(products: list) -> str:
     """Generate HTML for the horizontal product-card carousel."""
@@ -112,9 +96,14 @@ def display_carousel_html(products: list) -> str:
     """
 
 
-def reset_session():
+def reset_session(enabled_providers: list):
     st.session_state.messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT.format(
+                enabled_providers=", ".join(enabled_providers)
+            ),
+        },
         {
             "role": "assistant",
             "content": "Hi! What can I help you find today?",
@@ -127,11 +116,19 @@ def reset_session():
 def run_app():
     st.title("🛍️ Personal Shopping Assistant")
     st.write("Describe what you want in your own words. I’ll search connected shopping catalogs.")
+    enabled_providers = get_enabled_providers()
+    st.caption(f"Connected catalogs: {', '.join(enabled_providers)}")
 
     if "session_closed" not in st.session_state:
         st.session_state.session_closed = False
+    if "catalog_visitor_id" not in st.session_state:
+        st.session_state.catalog_visitor_id = uuid.uuid4().hex
     if "messages" not in st.session_state:
-        reset_session()
+        reset_session(enabled_providers)
+    else:
+        st.session_state.messages[0]["content"] = SYSTEM_PROMPT.format(
+            enabled_providers=", ".join(enabled_providers)
+        )
 
     hf_token = st.sidebar.text_input(
         "Enter Hugging Face Token:",
@@ -155,7 +152,7 @@ def run_app():
         if st.session_state.session_closed:
             st.warning("Session Closed")
             if st.button("🔄 Start New Session"):
-                reset_session()
+                reset_session(enabled_providers)
                 st.rerun()
         else:
             st.success("Bot Active")
@@ -214,12 +211,12 @@ def run_app():
     ]
 
     with st.chat_message("assistant"):
-        with st.spinner("Searching stores and web..."):
+        with st.spinner("Choosing catalogs and searching..."):
             try:
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=payload_messages,
-                    tools=TOOLS,
+                    tools=[build_search_tool(enabled_providers)],
                     tool_choice="auto",
                 )
                 assistant_message = response.choices[0].message
@@ -229,7 +226,10 @@ def run_app():
                     for tool_call in assistant_message.tool_calls:
                         if tool_call.function.name == "search_shopify_dynamic":
                             arguments = json.loads(tool_call.function.arguments)
-                            products = search_shopify_dynamic(**arguments)
+                            products = search_shopify_dynamic(
+                                **arguments,
+                                visitor_id=st.session_state.catalog_visitor_id,
+                            )
 
                     if products:
                         reply_text = f"Here are top matching results for **'{user_input}'**:"

@@ -125,13 +125,13 @@ The system uses Streamlit for UI and session orchestration, a hosted LLM for con
 ---
 
 ## 8. Supported Stores Overview
-The app now searches Shopify's eligible Global Catalog rather than a hard-coded store list. Catalog availability and results depend on Shopify's eligibility, market context, and catalog response.
+The app can route natural-language product requests to Shopify Global Catalog, eBay Browse, Amazon Creators, and (when configured) a Google Vertex AI Search for commerce catalog. The LLM chooses among the providers that are enabled for the deployment.
 
 ## MLOps CI/CD
 
 The repository-root [GitHub Actions workflow](../.github/workflows/discovery-agent.yml) validates Python syntax, lint, and unit tests for pull requests and pushes. On pushes to `main` and version tags (`v*`), it builds the Streamlit container and publishes commit-, release-, and (on `main`) `latest`-tagged images to GitHub Container Registry (GHCR).
 
-The Llama model is served remotely through the Hugging Face Router; this repository does not train or package model weights. Product discovery uses Shopify's Global Catalog MCP endpoint (`https://catalog.shopify.com/api/ucp/mcp`) and a UCP agent profile. Optional marketplace adapters use the eBay Browse API and Amazon Creators API. The pipeline versions and delivers the application container. Configure API credentials as server-side secrets; never commit them or expose them in the browser. Configure `HF_TOKEN` as a runtime secret; the app also supports entering it in the sidebar for local interactive use. Set `SHOPIFY_CATALOG_COUNTRY` and `SHOPIFY_CATALOG_CURRENCY` to change the default market (`US`/`USD`); `SHOPIFY_UCP_AGENT_PROFILE` can override the example profile with an agent profile you host.
+The Llama model is served remotely through the Hugging Face Router; this repository does not train or package model weights. Product discovery uses Shopify's Global Catalog MCP endpoint (`https://catalog.shopify.com/api/ucp/mcp`), optional eBay Browse and Amazon Creators APIs, and (only when configured) Vertex AI Search for commerce over your own Google catalog. The LLM chooses providers based on query intent, from only those enabled in deployment configuration. The pipeline versions and delivers the application container. Configure API credentials as server-side secrets; never commit them or expose them in the browser. Configure `HF_TOKEN` as a runtime secret; the app also supports entering it in the sidebar for local interactive use. Set `SHOPIFY_CATALOG_COUNTRY` and `SHOPIFY_CATALOG_CURRENCY` to change the default market (`US`/`USD`); `SHOPIFY_UCP_AGENT_PROFILE` can override the example profile with an agent profile you host.
 
 ### Optional marketplace setup
 
@@ -140,7 +140,9 @@ Copy the variables from `.env.example` into your local environment or Streamlit 
 * **eBay**: create production application keys in the [eBay Developers Program](https://developer.ebay.com/). Set `EBAY_CLIENT_ID` and `EBAY_CLIENT_SECRET`; `EBAY_MARKETPLACE_ID` defaults to `EBAY_US`. The app obtains and reuses application OAuth tokens for Browse API keyword search.
 * **Amazon**: enroll in the [Amazon Associates program](https://affiliate-program.amazon.com/) for your target marketplace, obtain Creators API access and credentials, and configure `AMAZON_CLIENT_ID`, `AMAZON_CLIENT_SECRET`, and `AMAZON_PARTNER_TAG`. Amazon currently requires at least 10 qualifying sales in the previous 30 days for API access. Set `AMAZON_MARKETPLACE` and `AMAZON_CREDENTIAL_REGION` to the approved target marketplace/credential region. Amazon result links use your partner tag.
 
-When credentials are missing, that marketplace is skipped. Catalog offers are interleaved so enabled sources can contribute to the result list. Pricing/availability remain subject to each provider's marketplace and affiliate display policies.
+When credentials are missing, that provider is omitted from the LLM's provider choices. The LLM selects one or more enabled providers based on explicit marketplace preference and inferred query intent. If multiple providers are chosen, offers are interleaved to keep one source from filling the result list. Pricing/availability remain subject to each provider's marketplace and affiliate display policies.
+
+* **Google Vertex AI Search for commerce**: set `GOOGLE_CLOUD_PROJECT` and, if needed, the location, catalog, and serving config values in `.env.example`. Enable the API and grant the runtime identity the Retail Search permission `retail.servingConfigs.search`. Authentication uses Application Default Credentials/workload identity, or `GOOGLE_SERVICE_ACCOUNT_INFO` as a protected service-account JSON secret on Streamlit Cloud. Import your own product catalog into the project first. Google results are only for that retailer-owned catalog, not public Google Shopping listings.
 
 Application code is separated into `src/` (`discovery_logic.py` and `product_search.py`); `streamlit_app.py` is the independent Streamlit UI entrypoint. The previous app scripts are preserved under `notebooks/legacy/`. See [Run locally](#run-locally) for setup instructions.
 
@@ -159,4 +161,4 @@ Google offers two relevant but different products:
 * [Vertex AI Search for commerce](https://cloud.google.com/retail/docs/search): personalized search and recommendations over a retailer's **own ingested product catalog**. It needs a Google Cloud project, catalog ingestion, and configuration; it is not a turnkey public product feed like Shopify Global Catalog.
 * [Google Merchant API](https://developers.google.com/merchant/api): manage/read processed products in **your own Merchant Center account** and product performance data; it is not a general cross-store shopping-search API.
 
-Shopify Global Catalog is the cross-merchant source for eligible Shopify offers. eBay Browse and Amazon Creators are marketplace-specific sources. Google becomes useful if you later maintain a retailer-owned catalog in Merchant Center or Vertex AI Search; adding Google would require a catalog feed/project, not just an API key.
+Shopify Global Catalog is the cross-merchant source for eligible Shopify offers. eBay Browse and Amazon Creators are marketplace-specific sources. Google Vertex AI Search is now an optional route when the request can be matched against the configured retailer-owned catalog; it requires an ingested catalog and Google Cloud configuration, not just an API key.

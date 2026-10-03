@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from decimal import Decimal
 
@@ -21,6 +22,7 @@ AMAZON_TOKEN_ENDPOINTS = {
     "FE": "https://api.amazon.co.jp/auth/o2/token",
 }
 AMAZON_SEARCH_URL = "https://creatorsapi.amazon/catalog/v1/searchItems"
+GOOGLE_RETAIL_API_ROOT = "https://retail.googleapis.com/v2"
 _token_cache = {}
 
 
@@ -64,25 +66,98 @@ def _decode_mcp_response(response: requests.Response) -> dict:
     return final_message
 
 
-def search_shopify_dynamic(prompt: str = "", max_price: float = None) -> list:
-    """Search enabled commerce catalogs and interleave normalized product results."""
-    providers = [
-        ("Shopify", lambda: search_shopify_catalog(prompt, max_price)),
-    ]
+def get_enabled_providers() -> list:
+    """Return providers configured for this deployment; Shopify is always enabled."""
+    providers = ["Shopify"]
     if _setting("EBAY_CLIENT_ID") and _setting("EBAY_CLIENT_SECRET"):
-        providers.append(("eBay", lambda: search_ebay(prompt, max_price)))
+        providers.append("eBay")
     if all(
         _setting(name)
         for name in ("AMAZON_CLIENT_ID", "AMAZON_CLIENT_SECRET", "AMAZON_PARTNER_TAG")
     ):
-        providers.append(("Amazon", lambda: search_amazon(prompt, max_price)))
+        providers.append("Amazon")
+    if _setting("GOOGLE_CLOUD_PROJECT"):
+        providers.append("Google")
+    return providers
+
+
+def build_search_tool(enabled_providers: list) -> dict:
+    """Build the LLM function schema from only the providers enabled in config."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "search_shopify_dynamic",
+            "description": (
+                "Searches selected connected product catalogs using the shopper's "
+                "natural-language request. Choose provider(s) based on query intent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": (
+                            "The shopper's natural-language product request, preserving "
+                            "preferences such as budget, intended use, style, gender, or brand."
+                        ),
+                    },
+                    "max_price": {
+                        "type": "number",
+                        "description": (
+                            "Optional maximum price in the configured catalog currency, "
+                            "only when the shopper explicitly stated a budget cap."
+                        ),
+                    },
+                    "providers": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": enabled_providers},
+                        "description": (
+                            "Provider(s) selected based on query intent. Explicit eBay/Amazon "
+                            "requests should prefer that marketplace; Google is an owned "
+                            "catalog, not public shopping search."
+                        ),
+                        "minItems": 1,
+                        "uniqueItems": True,
+                    },
+                },
+                "required": ["prompt", "providers"],
+            },
+        },
+    }
+
+
+def search_shopify_dynamic(
+    prompt: str = "",
+    max_price: float = None,
+    providers: list = None,
+    visitor_id: str = None,
+) -> list:
+    """Search LLM-selected configured catalogs and interleave normalized offers."""
+    enabled_providers = get_enabled_providers()
+    selected = [
+        provider
+        for provider in (providers or enabled_providers)
+        if provider in enabled_providers
+    ]
+    if not selected:
+        raise ValueError("Select at least one configured product catalog.")
+
+    search_functions = {
+        "Shopify": lambda: search_shopify_catalog(prompt, max_price),
+        "eBay": lambda: search_ebay(prompt, max_price),
+        "Amazon": lambda: search_amazon(prompt, max_price),
+        "Google": lambda: search_google(prompt, max_price, visitor_id=visitor_id),
+    }
+    selected_searches = [
+        (provider, search_functions[provider]) for provider in selected
+    ]
 
     results_by_provider = {}
     failures = []
-    with ThreadPoolExecutor(max_workers=len(providers)) as executor:
+    with ThreadPoolExecutor(max_workers=len(selected_searches)) as executor:
         futures = {
             executor.submit(search_fn): provider
-            for provider, search_fn in providers
+            for provider, search_fn in selected_searches
         }
         for future in as_completed(futures):
             provider = futures[future]
@@ -93,7 +168,7 @@ def search_shopify_dynamic(prompt: str = "", max_price: float = None) -> list:
 
     ordered_results = {
         provider: results_by_provider[provider]
-        for provider, _ in providers
+        for provider, _ in selected_searches
         if provider in results_by_provider
     }
     products = _interleave_results(ordered_results, limit=12)
@@ -102,6 +177,137 @@ def search_shopify_dynamic(prompt: str = "", max_price: float = None) -> list:
     if failures:
         raise RuntimeError("All configured product searches failed. " + "; ".join(failures))
     return []
+
+
+def search_google(
+    prompt: str,
+    max_price: float = None,
+    limit: int = 6,
+    visitor_id: str = None,
+) -> list:
+    """Search a deployment-owned Vertex AI Search for commerce product catalog."""
+    project = _setting("GOOGLE_CLOUD_PROJECT")
+    if not project:
+        raise RuntimeError("GOOGLE_CLOUD_PROJECT is not configured.")
+
+    try:
+        import google.auth
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import AuthorizedSession
+    except ImportError as error:
+        raise RuntimeError(
+            "Google search dependencies are missing; install google-auth."
+        ) from error
+
+    location = _setting("GOOGLE_CLOUD_LOCATION", "global")
+    catalog = _setting("GOOGLE_CLOUD_CATALOG_ID", "default_catalog")
+    serving_config = _setting("GOOGLE_CLOUD_SERVING_CONFIG", "default_search")
+    url, body = _build_google_search_request(
+        project=project,
+        location=location,
+        catalog=catalog,
+        serving_config=serving_config,
+        prompt=prompt,
+        max_price=max_price,
+        limit=limit,
+        visitor_id=visitor_id or uuid.uuid4().hex,
+    )
+
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+    service_account_info = _setting("GOOGLE_SERVICE_ACCOUNT_INFO")
+    if service_account_info:
+        credentials = service_account.Credentials.from_service_account_info(
+            json.loads(service_account_info), scopes=scopes
+        )
+    else:
+        credentials, _ = google.auth.default(scopes=scopes)
+    response = AuthorizedSession(credentials).post(url, json=body, timeout=20)
+    response.raise_for_status()
+    return _normalize_google_results(
+        response.json(), limit=limit, max_price=max_price
+    )
+
+
+def _build_google_search_request(
+    project: str,
+    location: str,
+    catalog: str,
+    serving_config: str,
+    prompt: str,
+    max_price: float = None,
+    limit: int = 6,
+    visitor_id: str = "",
+) -> tuple:
+    """Build the documented Vertex AI Search for commerce request."""
+    serving_config_path = (
+        f"projects/{project}/locations/{location}/catalogs/{catalog}/"
+        f"servingConfigs/{serving_config}"
+    )
+    url = f"{GOOGLE_RETAIL_API_ROOT}/{serving_config_path}:search"
+    body = {
+        "query": prompt,
+        "pageSize": min(limit, 24),
+        "visitorId": visitor_id or uuid.uuid4().hex,
+        "filter": 'availability: ANY("IN_STOCK")',
+    }
+    if max_price is not None:
+        body["filter"] += f" AND price: IN(*, {float(max_price)}i)"
+    return url, body
+
+
+def _normalize_google_results(
+    payload: dict, limit: int = 6, max_price: float = None
+) -> list:
+    """Convert Vertex AI Search product results to shared product-card objects."""
+    results = []
+    for result in payload.get("results", []):
+        product = result.get("product") or {}
+        product_url = product.get("uri", "")
+        if not product_url.startswith("https://"):
+            continue
+
+        price_info = product.get("priceInfo", {})
+        price = price_info.get("price")
+        currency = price_info.get("currencyCode")
+        numeric_price = _parse_amount(price)
+        if max_price is not None and numeric_price is not None and numeric_price > max_price:
+            continue
+        availability = product.get("availability", "")
+        if availability == "OUT_OF_STOCK":
+            continue
+        availability_text = {
+            "IN_STOCK": "In Stock",
+            "OUT_OF_STOCK": "Out of Stock",
+            "PREORDER": "Pre-order",
+            "BACKORDER": "Back-order",
+        }.get(availability, "Availability varies")
+        images = product.get("images", [])
+        image_url = images[0].get("uri", "") if images else ""
+        description = product.get("description", "")
+        brands = product.get("brands", [])
+
+        results.append(
+            _with_source(
+                {
+                    "title": product.get("title", "Google catalog product"),
+                    "price": (
+                        f"{currency} {price}"
+                        if price is not None and currency
+                        else "Price unavailable"
+                    ),
+                    "brand": brands[0] if brands else "Retail catalog",
+                    "availability": availability_text,
+                    "description": str(description)[:180],
+                    "url": product_url,
+                    "image_url": image_url,
+                },
+                "Google",
+            )
+        )
+        if len(results) >= limit:
+            break
+
+    return results
 
 
 def search_shopify_catalog(prompt: str, max_price: float = None) -> list:
