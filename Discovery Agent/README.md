@@ -1,11 +1,11 @@
 # Shopify Discovery Assistant — System Design Architecture
 
 ## Executive Summary
-The **Shopify Discovery Assistant** uses an LLM (Llama 3.3 70B via Hugging Face Router) to understand conversational product requests and Shopify's Global Catalog MCP (UCP) to search eligible Shopify merchants in one catalog call.
+The **Shopify Discovery Assistant** uses an LLM (Llama 3.3 70B via Hugging Face Router) to understand conversational product requests and searches Shopify's Global Catalog MCP (UCP), plus optional eBay and Amazon catalogs when their credentials are configured.
 
 ## Live dashboard
 
-Open the deployed [Shopify Discovery Assistant dashboard](https://ksjamznbsx6brz9rtobt8i.streamlit.app/). The app may take a short time to wake up if it has been idle. Enter a Hugging Face access token in the sidebar to start chatting. Describe what you want conversationally; categories and structured filters are optional.
+Open the deployed [Shopify Discovery Assistant dashboard](https://ksjamznbsx6brz9rtobt8i.streamlit.app/). The app may take a short time to wake up if it has been idle. Enter a Hugging Face access token in the sidebar to start chatting. Describe what you want conversationally; categories and structured filters are optional. eBay and Amazon appear in results only after their server-side credentials are configured.
 
 Browse the project files on [GitHub](https://github.com/AkankshaB123/AI-Agents-and-Optimisation-/tree/main/Discovery%20Agent).
 
@@ -131,7 +131,16 @@ The app now searches Shopify's eligible Global Catalog rather than a hard-coded 
 
 The repository-root [GitHub Actions workflow](../.github/workflows/discovery-agent.yml) validates Python syntax, lint, and unit tests for pull requests and pushes. On pushes to `main` and version tags (`v*`), it builds the Streamlit container and publishes commit-, release-, and (on `main`) `latest`-tagged images to GitHub Container Registry (GHCR).
 
-The Llama model is served remotely through the Hugging Face Router; this repository does not train or package model weights. Product discovery uses Shopify's Global Catalog MCP endpoint (`https://catalog.shopify.com/api/ucp/mcp`) and a UCP agent profile. The pipeline versions and delivers the application container. Configure `HF_TOKEN` as a runtime secret in the container platform. The app also supports entering the token in its sidebar for local interactive use. Set `SHOPIFY_CATALOG_COUNTRY` and `SHOPIFY_CATALOG_CURRENCY` to change the default market (`US`/`USD`); `SHOPIFY_UCP_AGENT_PROFILE` can override the example profile with an agent profile you host.
+The Llama model is served remotely through the Hugging Face Router; this repository does not train or package model weights. Product discovery uses Shopify's Global Catalog MCP endpoint (`https://catalog.shopify.com/api/ucp/mcp`) and a UCP agent profile. Optional marketplace adapters use the eBay Browse API and Amazon Creators API. The pipeline versions and delivers the application container. Configure API credentials as server-side secrets; never commit them or expose them in the browser. Configure `HF_TOKEN` as a runtime secret; the app also supports entering it in the sidebar for local interactive use. Set `SHOPIFY_CATALOG_COUNTRY` and `SHOPIFY_CATALOG_CURRENCY` to change the default market (`US`/`USD`); `SHOPIFY_UCP_AGENT_PROFILE` can override the example profile with an agent profile you host.
+
+### Optional marketplace setup
+
+Copy the variables from `.env.example` into your local environment or Streamlit Cloud secrets. For Streamlit Cloud, use flat top-level TOML keys (for example, `EBAY_CLIENT_ID = "..."`) in the app's Secrets settings. Shopify remains enabled by default. The other integrations are activated only when all required credentials for that provider are present.
+
+* **eBay**: create production application keys in the [eBay Developers Program](https://developer.ebay.com/). Set `EBAY_CLIENT_ID` and `EBAY_CLIENT_SECRET`; `EBAY_MARKETPLACE_ID` defaults to `EBAY_US`. The app obtains and reuses application OAuth tokens for Browse API keyword search.
+* **Amazon**: enroll in the [Amazon Associates program](https://affiliate-program.amazon.com/) for your target marketplace, obtain Creators API access and credentials, and configure `AMAZON_CLIENT_ID`, `AMAZON_CLIENT_SECRET`, and `AMAZON_PARTNER_TAG`. Amazon currently requires at least 10 qualifying sales in the previous 30 days for API access. Set `AMAZON_MARKETPLACE` and `AMAZON_CREDENTIAL_REGION` to the approved target marketplace/credential region. Amazon result links use your partner tag.
+
+When credentials are missing, that marketplace is skipped. Catalog offers are interleaved so enabled sources can contribute to the result list. Pricing/availability remain subject to each provider's marketplace and affiliate display policies.
 
 Application code is separated into `src/` (`discovery_logic.py` and `product_search.py`); `streamlit_app.py` is the independent Streamlit UI entrypoint. The previous app scripts are preserved under `notebooks/legacy/`. See [Run locally](#run-locally) for setup instructions.
 
@@ -143,13 +152,11 @@ Build the image with `docker build -t discovery-assistant .`, then start it with
 
 For deployment, pull the published image `ghcr.io/<owner>/<repository>:<tag>` into your container platform and inject `HF_TOKEN` through that platform's secret manager. Do not put tokens in the image or commit them to the repository.
 
-## Other product catalog options
+## What Google offers
 
-Shopify Global Catalog MCP is a good match for cross-merchant discovery specifically across eligible Shopify products. Other providers serve different catalog scopes and usually require separate credentials, program approval, or merchant-owned feeds:
+Google offers two relevant but different products:
 
-* [eBay Browse API](https://developer.ebay.com/api-docs/buy/browse/overview.html): search eBay listings by keyword, category, product identifier, or image; requires an eBay application access token.
-* [Amazon Creators API](https://affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction): Amazon product catalog access for eligible publishers, influencers, and affiliate partners. Amazon says this is the successor to the deprecated PA-API 5.
-* [Google Merchant API](https://developers.google.com/merchant/api): manage and read products in your own Google Merchant Center account; it is not a general cross-store shopping-search API.
-* Hosted search providers such as Algolia or Constructor: useful for a retailer's own product index, but they do not automatically provide a global multi-merchant catalog.
+* [Vertex AI Search for commerce](https://cloud.google.com/retail/docs/search): personalized search and recommendations over a retailer's **own ingested product catalog**. It needs a Google Cloud project, catalog ingestion, and configuration; it is not a turnkey public product feed like Shopify Global Catalog.
+* [Google Merchant API](https://developers.google.com/merchant/api): manage/read processed products in **your own Merchant Center account** and product performance data; it is not a general cross-store shopping-search API.
 
-For this app, keep Shopify Global Catalog as the primary Shopify discovery source. Consider adding eBay or an approved Amazon integration only if you want those marketplaces represented too; normalize each provider into the same product-card format and respect its access and display terms.
+Shopify Global Catalog is the cross-merchant source for eligible Shopify offers. eBay Browse and Amazon Creators are marketplace-specific sources. Google becomes useful if you later maintain a retailer-owned catalog in Merchant Center or Vertex AI Search; adding Google would require a catalog feed/project, not just an API key.

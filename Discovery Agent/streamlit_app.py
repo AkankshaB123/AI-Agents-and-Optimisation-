@@ -27,13 +27,13 @@ EXIT_INTENTS = [
     "close",
 ]
 
-SYSTEM_PROMPT = """You are an expert personal shopping assistant using Shopify's Global Catalog.
+SYSTEM_PROMPT = """You are an expert personal shopping assistant searching connected commerce catalogs.
 
 Search naturally:
 - Accept conversational product requests and preserve the shopper's stated preferences, budget, use case, style, gender, and brand in the search prompt.
 - When a clear maximum budget is provided, pass it as `max_price` so the catalog applies a hard price filter in the configured currency.
 - Do NOT require the shopper to choose a category, brand, or structured filter. Send their full natural-language product request to `search_shopify_dynamic`.
-- Search across eligible Shopify merchants. Never claim the catalog includes every merchant on the internet.
+- Search across connected providers (Shopify, and optionally eBay and Amazon). Never claim a provider is connected unless results are returned from it, and never imply these catalogs include every merchant on the internet.
 - Ask a follow-up only when the request is too ambiguous to identify a useful search, not merely because a category or filter is missing.
 - Do not invent product facts, prices, stock, or merchant details; rely on catalog results.
 
@@ -47,7 +47,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_shopify_dynamic",
-            "description": "Searches Shopify's Global Catalog across eligible merchants using the shopper's natural-language request. No category or structured filters are required.",
+            "description": "Searches connected product catalogs (Shopify Global Catalog, and eBay/Amazon when configured) using the shopper's natural-language request. No category or structured filters are required.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -126,7 +126,7 @@ def reset_session():
 
 def run_app():
     st.title("🛍️ Personal Shopping Assistant")
-    st.write("Describe what you want in your own words. I’ll search across Shopify merchants.")
+    st.write("Describe what you want in your own words. I’ll search connected shopping catalogs.")
 
     if "session_closed" not in st.session_state:
         st.session_state.session_closed = False
@@ -234,7 +234,7 @@ def run_app():
                     if products:
                         reply_text = f"Here are top matching results for **'{user_input}'**:"
                     else:
-                        reply_text = "I couldn't find matching available products in Shopify's catalog. Try another description or broaden your request."
+                        reply_text = "I couldn't find matching products in the connected catalogs. Try another description or broaden your request."
 
                     st.markdown(reply_text)
                     if products:
