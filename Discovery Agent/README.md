@@ -3,6 +3,50 @@
 ## Executive Summary
 The **Shopify Discovery Assistant** is a multi-tenant product discovery engine. It uses an LLM (Llama 3.3 70B via Hugging Face Router) for natural language intent parsing and dynamic tool invocation, combining parallel Shopify Store JSON searches with DuckDuckGo fallback web browsing.
 
+## Live dashboard
+
+Open the deployed [Shopify Discovery Assistant dashboard](https://ksjamznbsx6brz9rtobt8i.streamlit.app/). The app may take a short time to wake up if it has been idle. Enter a Hugging Face access token in the sidebar to start chatting.
+
+Browse the project files on [GitHub](https://github.com/AkankshaB123/AI-Agents-and-Optimisation-/tree/main/Discovery%20Agent).
+
+## Run locally
+
+The Streamlit UI is `streamlit_app.py`; reusable search and intent code lives under `src/`. Use Python 3.11 or newer.
+
+1. Create and activate a virtual environment from the repository root:
+
+      ```bash
+      python3.11 -m venv .venv
+      source .venv/bin/activate
+      ```
+
+2. Install the app dependencies:
+
+      ```bash
+      python -m pip install --upgrade pip
+      python -m pip install -r requirements.txt
+      ```
+
+3. Launch the app:
+
+      ```bash
+      streamlit run streamlit_app.py
+      ```
+
+4. Open the local URL printed by Streamlit (usually `http://localhost:8501`) and enter your Hugging Face token in the sidebar. Keep the token private; do not commit it to the repository. You can also set `HF_TOKEN` in your environment before launching.
+
+### Run checks
+
+Install `pytest` if it is not already available, then run the unit tests and Python compilation checks:
+
+```bash
+python -m pip install pytest
+python -m compileall -q src streamlit_app.py tests
+python -m pytest -q
+```
+
+The tests cover deterministic prompt parsing. Live product searches also require a valid Hugging Face token and network access to the Hugging Face Router, Shopify storefronts, and DuckDuckGo.
+
 ---
 
 ## 1. System Architecture Overview
@@ -103,3 +147,17 @@ The system is built as a single-node interactive assistant using Streamlit for U
 ## 8. Supported Stores Overview
 Pre-configured storefront endpoints:
 `gymshark.com`, `allbirds.com`, `kith.com`, `fabletics.com`, `aloyoga.com`, `chubbieshorts.com`, `rothys.com`, `taylormade-golf.com`, `cotopaxi.com`, `vuoriclothing.com`, `rhone.com`, `marine-layer.com`, `mottandbow.com`, `bombas.com`, `noble-apparel.com`, `unTuckit.com`, `brooklinen.com`, `outerknown.com`, `tentree.com`, `blundstone.com`, `tuckernuck.com`.
+
+## MLOps CI/CD
+
+The repository-root [GitHub Actions workflow](../.github/workflows/discovery-agent.yml) validates Python syntax, lint, and unit tests for pull requests and pushes. On pushes to `main` and version tags (`v*`), it builds the Streamlit container and publishes commit-, release-, and (on `main`) `latest`-tagged images to GitHub Container Registry (GHCR).
+
+The Llama model is served remotely through the Hugging Face Router; this repository does not train or package model weights. The pipeline versions and delivers the application container. Configure `HF_TOKEN` as a runtime secret in the container platform. The app also supports entering the token in its sidebar for local interactive use.
+
+Application code is separated into `src/` (`discovery_logic.py` and `product_search.py`); `streamlit_app.py` is the independent Streamlit UI entrypoint. The previous app scripts are preserved under `notebooks/legacy/`. See [Run locally](#run-locally) for setup instructions.
+
+### Run locally with Docker
+
+Build the image with `docker build -t discovery-assistant .`, then start it with `docker run --rm -p 8501:8501 -e HF_TOKEN="$HF_TOKEN" discovery-assistant`. Open `http://localhost:8501`.
+
+For deployment, pull the published image `ghcr.io/<owner>/<repository>:<tag>` into your container platform and inject `HF_TOKEN` through that platform's secret manager. Do not put tokens in the image or commit them to the repository.
