@@ -1,11 +1,11 @@
 # Shopify Discovery Assistant — System Design Architecture
 
 ## Executive Summary
-The **Shopify Discovery Assistant** is a multi-tenant product discovery engine. It uses an LLM (Llama 3.3 70B via Hugging Face Router) for natural language intent parsing and dynamic tool invocation, combining parallel Shopify Store JSON searches with DuckDuckGo fallback web browsing.
+The **Shopify Discovery Assistant** uses an LLM (Llama 3.3 70B via Hugging Face Router) to understand conversational product requests and Shopify's Global Catalog MCP (UCP) to search eligible Shopify merchants in one catalog call.
 
 ## Live dashboard
 
-Open the deployed [Shopify Discovery Assistant dashboard](https://ksjamznbsx6brz9rtobt8i.streamlit.app/). The app may take a short time to wake up if it has been idle. Enter a Hugging Face access token in the sidebar to start chatting.
+Open the deployed [Shopify Discovery Assistant dashboard](https://ksjamznbsx6brz9rtobt8i.streamlit.app/). The app may take a short time to wake up if it has been idle. Enter a Hugging Face access token in the sidebar to start chatting. Describe what you want conversationally; categories and structured filters are optional.
 
 Browse the project files on [GitHub](https://github.com/AkankshaB123/AI-Agents-and-Optimisation-/tree/main/Discovery%20Agent).
 
@@ -45,62 +45,42 @@ python -m compileall -q src streamlit_app.py tests
 python -m pytest -q
 ```
 
-The tests cover deterministic prompt parsing. Live product searches also require a valid Hugging Face token and network access to the Hugging Face Router, Shopify storefronts, and DuckDuckGo.
+The tests cover MCP request construction and catalog result normalization. Live product searches also require a valid Hugging Face token and network access to the Hugging Face Router and Shopify Global Catalog MCP.
 
 ---
 
 ## 1. System Architecture Overview
 
-The system is built as a single-node interactive assistant using Streamlit for UI and session orchestration. It coordinates intent parsing, session state persistence, multi-threaded e-commerce querying, and dynamic HTML carousel rendering.
+The system uses Streamlit for UI and session orchestration, a hosted LLM for conversational intent, and Shopify Global Catalog MCP for cross-merchant product discovery.
 
 ```
-+----------------+      +--------------------------+      +------------------------------+
-|                |      | Intent & Routing Engine  |----->| Shopify Parallel Workers     |---> [Shopify Stores]
-|  Streamlit UI  |----->| - Regex Rule Parser      |      | (ThreadPoolExecutor)         |
-|  (User Chat)   |      | - Llama 3.3 70B Agent    |      +------------------------------+
-+----------------+      +--------------------------+                     |
-                                     |                    +------------------------------+
-                                     +------------------->| DDG Web Search Workers       |---> [Web Search]
-                                                          | (DuckDuckGo Search API)      |
-                                                          +------------------------------+
+[ Streamlit UI ] -> [ Llama 3.3 intent + optional budget extraction ]
+                           |
+                           v
+                [ Shopify Global Catalog MCP / UCP ]
+                           |
+                           v
+                [ Normalize product offers ] -> [ Product cards ]
 ```
 
 ---
 
 ## 2. Core Component Breakdown
 
-* **Rule-Based Parsing Engine (*Deterministic*)**: Uses regular expressions to extract structured parameters (price caps, gender requirements, product category synonyms, target brand detection) prior to LLM reasoning.
-* **LLM Agent & Tool Calling (*Dynamic*)**: Employs Hugging Face Router with `Llama-3.3-70B-Instruct`. Enforces category rules, detects user ambiguity, and decides when to call `search_shopify_dynamic`.
-* **Parallel Store Search Engine (*I/O Bound*)**: Leverages Python's `ThreadPoolExecutor` with up to 25 workers. Direct queries hit Shopify endpoints (`/search/suggest.json`) with low timeouts (1.2s).
-* **Web Search Fallback (*Adaptive*)**: Utilizes `duckduckgo_search` for explicitly named external brands (e.g., Nike, Adidas) or as a fallback to ensure broad product discovery coverage.
+* **Natural-language intent parsing**: The model retains the shopper's free-text constraints (budget, activity, style, gender, or brand) without making category selection mandatory.
+* **LLM Agent & Tool Calling (*Dynamic*)**: Employs Hugging Face Router with `Llama-3.3-70B-Instruct` and calls the catalog search tool with the shopper's natural-language request.
+* **Global Catalog MCP**: Sends a single UCP-compatible MCP `search_catalog` request to Shopify's Global Catalog endpoint. Results span eligible Shopify merchants and include seller, variant, availability, price, media, and product links.
 
 ---
 
 ## 3. Request Lifecycle & Intent Routing Flow
 
 ```
-[ User Input ]
-      │
-      ▼
-[ 1. Regex Rule Parser ] ─── (Extracts budget, gender, categories, brand flags)
-      │
-      ▼
-[ 2. Llama 3.3 70B LLM Agent ] ─── (Evaluates context & decides tool execution)
-      │
-      ├─── Call `search_shopify_dynamic()`
-      │          │
-      │          ├─── Direct External Brand Match? ───> [ DuckDuckGo Worker ]
-      │          │
-      │          └─── General Discovery Query ───────> [ ThreadPoolExecutor (25 Threads) ]
-      │                                                         │
-      │                                                         ▼
-      │                                              [ Query 20+ Shopify Stores ]
-      │
-      ▼
-[ 3. Deduplication & Filtering Engine ] ─── (Max 1 product/store, apply price/gender caps)
-      │
-      ▼
-[ 4. Dynamic HTML Carousel Render ]
+[ Shopper's natural-language request ]
+      -> [ Llama 3.3: retains intent and extracts an explicit max budget ]
+      -> [ Shopify Global Catalog MCP / UCP: search_catalog ]
+      -> [ Normalize seller offers, currency, availability, and product links ]
+      -> [ Render product cards ]
 ```
 
 ---
@@ -109,26 +89,26 @@ The system is built as a single-node interactive assistant using Streamlit for U
 
 | Function / Component | Input / Dependencies | Primary Responsibility & Logic |
 | :--- | :--- | :--- |
-| `parse_user_prompt` | Raw `user_prompt` string | Executes regex mapping for prices (e.g., `under $50`), genders, category synonyms, and brand detection against explicit and store lists. |
-| `fetch_store_products` | Store domain, query, filter params | Calls `https://{store}/search/suggest.json`. Enforces in-stock checking, synonym/category matching, gender filtering, and budget caps. |
-| `fetch_duckduckgo_products` | Search query string, brand name | Queries DDG text and image endpoints concurrently. Parses price markers from snippets and pairs them with image thumbnails. |
-| `search_shopify_dynamic` | Cleaned search prompt string | Main router. Redirects external brands to DDG or dispatches parallel workers across 20+ Shopify stores with DDG backup. Deduplicates by store. |
+| `build_catalog_request` | Natural-language prompt and optional market context | Builds a UCP-compatible MCP `tools/call` request to the global `search_catalog` tool. |
+| `normalize_catalog_response` | MCP Global Catalog response | Converts available catalog variants, seller data, currency minor units, media, and safe HTTPS product links into UI cards. |
+| `search_shopify_dynamic` | Natural-language search prompt | Calls Shopify Global Catalog MCP once and returns normalized result cards. |
 | `display_carousel_html` | Normalized products list | Transforms product JSON objects into styled horizontal scrolling cards with images, stock badges, pricing, and direct links. |
 
 ---
 
 ## 5. Intent & Filtering Constraints Matrix
 
-* **Category Synonyms Filtering**: Enforces strict item type matches. E.g., `t-shirt` matches keywords: *t-shirt, tshirt, tee, tees*. Prevents irrelevant store search suggestions from leaking into user results.
-* **Gender Isolation Rules**: If `female` is active, titles containing *men's, mens, for men* are explicitly dropped. If `male` is active, *women's, womens, for women* are excluded.
+* **Natural-language intent**: Shoppers can describe product type, use case, brand, style, and other preferences in free text; selecting structured categories is not required.
+* **Hard price filtering**: If the shopper states a maximum budget, the assistant extracts it into the catalog's `filters.price.max` using the configured currency's minor units.
+* **Availability filtering**: Catalog searches default to available products; result cards are additionally normalized using variant availability.
 
 ---
 
 ## 6. Key Operational & Performance Metrics
 
-* **HTTP API Timeout**: `1.2s` per store endpoint
-* **Max Parallel Threads**: `25` concurrent workers (`ThreadPoolExecutor`)
-* **Max Displayed Cards**: `6` unique store product items
+* **Catalog requests**: One Global Catalog MCP search request per product lookup
+* **Default market context**: United States / USD, configurable with environment variables
+* **Max Displayed Cards**: `6` product offers
 * **Context Window Truncation**: Conversation limited to the last `6` chat turns (`conversation[-6:]`)
 
 ---
@@ -137,22 +117,21 @@ The system is built as a single-node interactive assistant using Streamlit for U
 
 | Area | Current Bottleneck / Risk | Proposed Architectural Enhancement |
 | :--- | :--- | :--- |
-| **Rate Limiting** | High-frequency Shopify endpoint queries may lead to IP blocking or HTTP 429 errors. | Implement an asynchronous proxy rotation system or store caching layer (e.g., Redis with a 15-min TTL). |
-| **DDG Dependency** | Web scraping DDG snippets for prices is prone to formatting inconsistencies. | Integrate structured commercial APIs (e.g., Google Shopping API or SerpAPI) for unified product parsing. |
+| **Catalog coverage** | Global Catalog covers eligible Shopify listings, not every online merchant. | Add a separately licensed search provider only if broader non-Shopify coverage is a requirement. |
+| **Catalog latency and limits** | A single catalog API avoids fanning out to many stores, but latency and rate limits remain service-dependent. | Measure end-to-end latency and handle timeouts/rate-limit responses; don't cache product search results or images. |
 | **State Management** | Session state is ephemeral and isolated to a single server process instance. | Migrate session storage and user preferences to an external persistence store (e.g., PostgreSQL / Redis). |
 | **Model Latency** | Synchronous LLM completion requests create visible UI loading spinners. | Implement streaming responses for chat text and asynchronously hydrate the product carousel component. |
 
 ---
 
 ## 8. Supported Stores Overview
-Pre-configured storefront endpoints:
-`gymshark.com`, `allbirds.com`, `kith.com`, `fabletics.com`, `aloyoga.com`, `chubbieshorts.com`, `rothys.com`, `taylormade-golf.com`, `cotopaxi.com`, `vuoriclothing.com`, `rhone.com`, `marine-layer.com`, `mottandbow.com`, `bombas.com`, `noble-apparel.com`, `unTuckit.com`, `brooklinen.com`, `outerknown.com`, `tentree.com`, `blundstone.com`, `tuckernuck.com`.
+The app now searches Shopify's eligible Global Catalog rather than a hard-coded store list. Catalog availability and results depend on Shopify's eligibility, market context, and catalog response.
 
 ## MLOps CI/CD
 
 The repository-root [GitHub Actions workflow](../.github/workflows/discovery-agent.yml) validates Python syntax, lint, and unit tests for pull requests and pushes. On pushes to `main` and version tags (`v*`), it builds the Streamlit container and publishes commit-, release-, and (on `main`) `latest`-tagged images to GitHub Container Registry (GHCR).
 
-The Llama model is served remotely through the Hugging Face Router; this repository does not train or package model weights. The pipeline versions and delivers the application container. Configure `HF_TOKEN` as a runtime secret in the container platform. The app also supports entering the token in its sidebar for local interactive use.
+The Llama model is served remotely through the Hugging Face Router; this repository does not train or package model weights. Product discovery uses Shopify's Global Catalog MCP endpoint (`https://catalog.shopify.com/api/ucp/mcp`) and a UCP agent profile. The pipeline versions and delivers the application container. Configure `HF_TOKEN` as a runtime secret in the container platform. The app also supports entering the token in its sidebar for local interactive use. Set `SHOPIFY_CATALOG_COUNTRY` and `SHOPIFY_CATALOG_CURRENCY` to change the default market (`US`/`USD`); `SHOPIFY_UCP_AGENT_PROFILE` can override the example profile with an agent profile you host.
 
 Application code is separated into `src/` (`discovery_logic.py` and `product_search.py`); `streamlit_app.py` is the independent Streamlit UI entrypoint. The previous app scripts are preserved under `notebooks/legacy/`. See [Run locally](#run-locally) for setup instructions.
 
@@ -163,3 +142,14 @@ Compatibility launchers named `discovery_appv2.py` remain at the repository root
 Build the image with `docker build -t discovery-assistant .`, then start it with `docker run --rm -p 8501:8501 -e HF_TOKEN="$HF_TOKEN" discovery-assistant`. Open `http://localhost:8501`.
 
 For deployment, pull the published image `ghcr.io/<owner>/<repository>:<tag>` into your container platform and inject `HF_TOKEN` through that platform's secret manager. Do not put tokens in the image or commit them to the repository.
+
+## Other product catalog options
+
+Shopify Global Catalog MCP is a good match for cross-merchant discovery specifically across eligible Shopify products. Other providers serve different catalog scopes and usually require separate credentials, program approval, or merchant-owned feeds:
+
+* [eBay Browse API](https://developer.ebay.com/api-docs/buy/browse/overview.html): search eBay listings by keyword, category, product identifier, or image; requires an eBay application access token.
+* [Amazon Creators API](https://affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction): Amazon product catalog access for eligible publishers, influencers, and affiliate partners. Amazon says this is the successor to the deprecated PA-API 5.
+* [Google Merchant API](https://developers.google.com/merchant/api): manage and read products in your own Google Merchant Center account; it is not a general cross-store shopping-search API.
+* Hosted search providers such as Algolia or Constructor: useful for a retailer's own product index, but they do not automatically provide a global multi-merchant catalog.
+
+For this app, keep Shopify Global Catalog as the primary Shopify discovery source. Consider adding eBay or an approved Amazon integration only if you want those marketplaces represented too; normalize each provider into the same product-card format and respect its access and display terms.
