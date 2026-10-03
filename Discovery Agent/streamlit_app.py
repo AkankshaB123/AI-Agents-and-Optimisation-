@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 import uuid
 from html import escape
 
@@ -213,23 +214,32 @@ def run_app():
     with st.chat_message("assistant"):
         with st.spinner("Choosing catalogs and searching..."):
             try:
+                request_started = time.perf_counter()
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=payload_messages,
                     tools=[build_search_tool(enabled_providers)],
                     tool_choice="auto",
                 )
+                llm_elapsed_ms = (time.perf_counter() - request_started) * 1000
                 assistant_message = response.choices[0].message
                 products = []
+                catalog_elapsed_ms = None
 
                 if assistant_message.tool_calls:
                     for tool_call in assistant_message.tool_calls:
                         if tool_call.function.name == "search_shopify_dynamic":
                             arguments = json.loads(tool_call.function.arguments)
+                            catalog_started = time.perf_counter()
                             products = search_shopify_dynamic(
                                 **arguments,
                                 visitor_id=st.session_state.catalog_visitor_id,
                             )
+                            catalog_elapsed_ms = (
+                                time.perf_counter() - catalog_started
+                            ) * 1000
+
+                    total_elapsed_ms = (time.perf_counter() - request_started) * 1000
 
                     if products:
                         reply_text = f"Here are top matching results for **'{user_input}'**:"
@@ -237,6 +247,15 @@ def run_app():
                         reply_text = "I couldn't find matching products in the connected catalogs. Try another description or broaden your request."
 
                     st.markdown(reply_text)
+                    st.caption(
+                        f"⏱️ Search completed in **{total_elapsed_ms:,.0f} ms** "
+                        f"(AI: {llm_elapsed_ms:,.0f} ms"
+                        + (
+                            f" · selected catalog(s): {catalog_elapsed_ms:,.0f} ms)"
+                            if catalog_elapsed_ms is not None
+                            else ")"
+                        )
+                    )
                     if products:
                         st.components.v1.html(
                             display_carousel_html(products),
@@ -251,8 +270,13 @@ def run_app():
                         }
                     )
                 else:
+                    total_elapsed_ms = (time.perf_counter() - request_started) * 1000
                     reply_text = assistant_message.content
                     st.markdown(reply_text)
+                    st.caption(
+                        f"⏱️ Response generated in **{total_elapsed_ms:,.0f} ms** "
+                        f"(AI: {llm_elapsed_ms:,.0f} ms)"
+                    )
                     st.session_state.messages.append(
                         {
                             "role": "assistant",

@@ -9,6 +9,22 @@ Open the deployed [Shopify Discovery Assistant dashboard](https://ksjamznbsx6brz
 
 Browse the project files on [GitHub](https://github.com/AkankshaB123/AI-Agents-and-Optimisation-/tree/main/Discovery%20Agent).
 
+## Project and script structure
+
+| Path | Purpose |
+| --- | --- |
+| [streamlit_app.py](streamlit_app.py) | Streamlit UI, chat/session handling, LLM tool schema, and provider-routing instructions. |
+| [src/product_search.py](src/product_search.py) | Configured-provider discovery, LLM-selected routing, and Shopify, eBay, Amazon, and Google search adapters. |
+| [src/discovery_logic.py](src/discovery_logic.py) | Shopify UCP/MCP request construction and catalog-response normalization. |
+| [tests/test_discovery_logic.py](tests/test_discovery_logic.py) | Unit tests for Shopify catalog request and response helpers. |
+| [tests/test_product_search.py](tests/test_product_search.py) | Tests for provider selection, API adapters, and shared product normalization. |
+| [discovery_appv2.py](discovery_appv2.py) | Compatibility entrypoint for existing Streamlit deployment settings; delegates to the current UI. |
+| [notebooks/legacy/discovery_appv2.py](notebooks/legacy/discovery_appv2.py) | Archived pre-refactor application script. |
+| [notebooks/legacy/config.py](notebooks/legacy/config.py) | Archived configuration from the earlier application. |
+| [../.github/workflows/discovery-agent.yml](../.github/workflows/discovery-agent.yml) | Repository-level CI validation and container publish workflow. |
+
+Normal runtime flow: Streamlit presents the shopper's request to the LLM; the LLM chooses from providers enabled by configuration; the selected adapters search in parallel; normalized offers are displayed as product cards. Shopify is always available, while eBay, Amazon, and Google require their respective credentials/catalog setup.
+
 ## Run locally
 
 The Streamlit UI is `streamlit_app.py`; reusable search and intent code lives under `src/`. Use Python 3.11 or newer.
@@ -46,6 +62,10 @@ python -m pytest -q
 ```
 
 The tests cover MCP request construction and catalog result normalization. Live product searches also require a valid Hugging Face token and network access to the Hugging Face Router and Shopify Global Catalog MCP.
+
+### Search latency
+
+After each chat response, the UI shows the measured end-to-end time in milliseconds, with the AI request and selected catalog search time split out when a search tool runs. In a small three-query Shopify MCP smoke test on October 3, 2026, catalog requests took **556–2,130 ms** (median **626 ms**); the first request was the slowest. Treat this only as a rough, environment-specific baseline—not a latency guarantee. Cold starts, Hugging Face model response time, network conditions, enabled provider count, and each marketplace's API can increase total response time. When multiple providers are selected, their searches run in parallel, so catalog time is approximately the slowest selected provider, plus orchestration overhead.
 
 ---
 
