@@ -156,6 +156,8 @@ The Llama model is served remotely through the Hugging Face Router; this reposit
 
 Application code is separated into `src/` (`discovery_logic.py` and `product_search.py`); `streamlit_app.py` is the independent Streamlit UI entrypoint. The previous app scripts are preserved under `notebooks/legacy/`. See [Run locally](#run-locally) for setup instructions.
 
+Compatibility launchers named `discovery_appv2.py` remain at the repository root and in this folder for existing Streamlit Cloud settings; both delegate to the maintained `streamlit_app.py` UI.
+
 ### Run locally with Docker
 
 Build the image with `docker build -t discovery-assistant .`, then start it with `docker run --rm -p 8501:8501 -e HF_TOKEN="$HF_TOKEN" discovery-assistant`. Open `http://localhost:8501`.
