@@ -4,12 +4,14 @@ on:
   push:
     branches: [main]
     paths:
+      - "streamlit_app.py"
       - "Discovery Agent/**"
       - ".streamlit/**"
       - "requirements.txt"
       - ".github/workflows/discovery-agent-ci.yml"
   pull_request:
     paths:
+      - "streamlit_app.py"
       - "Discovery Agent/**"
       - ".streamlit/**"
       - "requirements.txt"
@@ -30,13 +32,11 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            Discovery Agent/requirements.txt
+          cache-dependency-path: requirements.txt
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile application
-        run: python -m py_compile "Discovery Agent/streamlit_app.py" "Discovery Agent/discovery_appv2.py" "Discovery Agent/src/product_search.py" "Discovery Agent/src/discovery_logic.py"
+        run: python -m py_compile streamlit_app.py "Discovery Agent/streamlit_app.py" "Discovery Agent/discovery_appv2.py" "Discovery Agent/src/product_search.py" "Discovery Agent/src/discovery_logic.py"
       - name: Smoke test imports and search schema
         env:
           PYTHONPATH: "Discovery Agent"
