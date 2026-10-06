@@ -1,0 +1,2 @@
+# Streamlit Community Cloud reads dependencies from the repo root for a consistent CI/CD environment.
+-r Discovery Agent/requirements.txt
