@@ -47,6 +47,6 @@ jobs:
           assert "Shopify" in providers
           tool = build_search_tool(providers)
           assert tool["type"] == "function"
-          assert tool["function"]["name"] == "search_products"
+          assert tool["function"]["name"] == "search_shopify_dynamic"
           print("Smoke test passed:", providers)
           PY
