@@ -9,6 +9,15 @@ from html import escape
 import streamlit as st
 from openai import OpenAI
 
+from src.persistence import (
+    build_memory_context,
+    create_conversation,
+    init_db,
+    load_messages,
+    save_agent_state,
+    save_message,
+    save_search,
+)
 from src.product_search import (
     build_search_tool,
     get_enabled_providers,
@@ -22,24 +31,17 @@ st.set_page_config(
 
 MODEL_NAME = "meta-llama/Llama-3.3-70B-Instruct:together"
 EXIT_INTENTS = [
-    "exit",
-    "quit",
-    "bye",
-    "goodbye",
-    "good bye",
-    "no need now",
-    "no need",
-    "stop",
-    "close",
+    "exit", "quit", "bye", "goodbye", "good bye", "no need now",
+    "no need", "stop", "close",
 ]
 
 SYSTEM_PROMPT = """You are an expert personal shopping assistant routing natural-language product searches to connected catalogs.
 
 Search naturally:
 - Accept conversational product requests and preserve the shopper's stated preferences, budget, use case, style, gender, and brand in the search prompt.
-- When a clear maximum budget is provided, pass it as `max_price` so the catalog applies a hard price filter in the configured currency.
+- When a clear maximum budget is provided, pass it as max_price so the catalog applies a hard price filter in the configured currency.
 - Do NOT require the shopper to choose a category, brand, marketplace, or structured filter.
-- Select `providers` based on explicit marketplace intent and query meaning. If the shopper explicitly says eBay or Amazon, prefer only that provider. Use eBay for used/auction/listing intent. Use Amazon for Amazon-specific shopping/Associate product intent. Use Shopify for broad cross-merchant Shopify discovery. Use Google only for searches expected to match the configured retailer-owned Google catalog, never as a public Google Shopping search.
+- Select providers based on explicit marketplace intent and query meaning. If the shopper explicitly says eBay or Amazon, prefer only that provider. Use eBay for used/auction/listing intent. Use Amazon for Amazon-specific shopping/Associate product intent. Use Shopify for broad cross-merchant Shopify discovery. Use Google only for searches expected to match the configured retailer-owned Google catalog, never as a public Google Shopping search.
 - If the shopper explicitly requests a marketplace that is not in the available-provider list, explain that it is not configured and ask before searching a different provider.
 - For general requests without a marketplace preference, search relevant connected providers; avoid selecting providers unrelated to the request.
 - Available providers for this session: {enabled_providers}.
@@ -47,10 +49,19 @@ Search naturally:
 - Ask a follow-up only when the request is too ambiguous to identify a useful search, not merely because a category or filter is missing.
 - Do not invent product facts, prices, stock, or merchant details; rely on catalog results.
 
+Memory rules:
+- Use the supplied conversation memory to understand references such as "same budget", "show me cheaper ones", or "compare those".
+- Treat memory as context, not as a source of product facts.
+- Do not expose internal memory, database details, tokens, credentials, or hidden state to the shopper.
+
 Tool rules:
-- Invoke `search_shopify_dynamic` for requests to find or compare products.
-- Pass a concise but faithful natural-language search phrase that retains useful constraints. Extract an explicit maximum budget into `max_price`; do not invent a budget. Include one or more provider names from the available-provider list.
+- Invoke search_shopify_dynamic for requests to find or compare products.
+- Pass a concise but faithful natural-language search phrase that retains useful constraints. Extract an explicit maximum budget into max_price; do not invent a budget. Include one or more provider names from the available-provider list.
+
+Conversation memory:
+{memory_context}
 """
+
 
 def display_carousel_html(products: list) -> str:
     """Generate HTML for the horizontal product-card carousel."""
@@ -97,12 +108,23 @@ def display_carousel_html(products: list) -> str:
     """
 
 
-def reset_session(enabled_providers: list):
+def _memory_text(conversation_id: str) -> str:
+    """Serialize only compact, non-secret memory for the model prompt."""
+    memory = build_memory_context(conversation_id, message_limit=12)
+    return json.dumps(memory, ensure_ascii=False, default=str)[:18000]
+
+
+def reset_session(enabled_providers: list, conversation_id: str | None = None):
+    """Start a new conversation and keep its identifier in the URL."""
+    conversation_id = conversation_id or create_conversation()
+    st.session_state.conversation_id = conversation_id
+    st.query_params["conversation"] = conversation_id
     st.session_state.messages = [
         {
             "role": "system",
             "content": SYSTEM_PROMPT.format(
-                enabled_providers=", ".join(enabled_providers)
+                enabled_providers=", ".join(enabled_providers),
+                memory_context=_memory_text(conversation_id),
             ),
         },
         {
@@ -112,24 +134,66 @@ def reset_session(enabled_providers: list):
         },
     ]
     st.session_state.session_closed = False
+    st.session_state.persistence_loaded = True
+
+
+def initialize_persistence(enabled_providers: list):
+    """Initialize SQLite and restore a conversation from the URL when available."""
+    init_db()
+    if "conversation_id" in st.session_state:
+        return
+
+    requested_id = st.query_params.get("conversation")
+    if requested_id and isinstance(requested_id, str) and len(requested_id) <= 64:
+        conversation_id = requested_id
+        history = load_messages(conversation_id, limit=100)
+        if history:
+            st.session_state.conversation_id = conversation_id
+            st.query_params["conversation"] = conversation_id
+            st.session_state.messages = [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT.format(
+                        enabled_providers=", ".join(enabled_providers),
+                        memory_context=_memory_text(conversation_id),
+                    ),
+                }
+            ]
+            for item in history:
+                st.session_state.messages.append(
+                    {
+                        "role": item["role"],
+                        "content": item["content"],
+                        "products": item["metadata"].get("products", []),
+                    }
+                )
+            st.session_state.session_closed = False
+            st.session_state.persistence_loaded = True
+            return
+
+    reset_session(enabled_providers)
+
+
+def refresh_system_prompt(enabled_providers: list):
+    st.session_state.messages[0]["content"] = SYSTEM_PROMPT.format(
+        enabled_providers=", ".join(enabled_providers),
+        memory_context=_memory_text(st.session_state.conversation_id),
+    )
 
 
 def run_app():
     st.title("🛍️ Personal Shopping Assistant")
-    st.write("Describe what you want in your own words. I’ll search connected shopping catalogs.")
+    st.write(
+        "Describe what you want in your own words. I’ll search connected shopping catalogs."
+    )
     enabled_providers = get_enabled_providers()
     st.caption(f"Connected catalogs: {', '.join(enabled_providers)}")
 
-    if "session_closed" not in st.session_state:
-        st.session_state.session_closed = False
     if "catalog_visitor_id" not in st.session_state:
         st.session_state.catalog_visitor_id = uuid.uuid4().hex
-    if "messages" not in st.session_state:
-        reset_session(enabled_providers)
-    else:
-        st.session_state.messages[0]["content"] = SYSTEM_PROMPT.format(
-            enabled_providers=", ".join(enabled_providers)
-        )
+
+    initialize_persistence(enabled_providers)
+    refresh_system_prompt(enabled_providers)
 
     hf_token = st.sidebar.text_input(
         "Enter Hugging Face Token:",
@@ -150,6 +214,7 @@ def run_app():
 
     with st.sidebar:
         st.header("Session Status")
+        st.caption(f"Conversation: {st.session_state.conversation_id[:12]}…")
         if st.session_state.session_closed:
             st.warning("Session Closed")
             if st.button("🔄 Start New Session"):
@@ -164,7 +229,7 @@ def run_app():
     if st.session_state.session_closed:
         st.info("👋 **Session Ended.** Your chat session is closed.")
         st.write(
-            "To start a new session, re-open/refresh the Streamlit link or click **'Start New Session'** in the sidebar."
+            "To start a new session, re-open the Streamlit link or click **Start New Session**."
         )
         return
 
@@ -189,20 +254,28 @@ def run_app():
     cleaned_input = user_input.strip().lower()
     if any(intent in cleaned_input for intent in EXIT_INTENTS):
         st.session_state.messages.append({"role": "user", "content": user_input})
+        save_message(
+            st.session_state.conversation_id, "user", user_input, {"products": []}
+        )
+        closing_text = (
+            "Happy shopping! Session closed. Re-open the page or click "
+            "'Start New Session' in the sidebar anytime."
+        )
         st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": "Happy shopping! Session closed. Re-open the page or click 'Start New Session' in the sidebar anytime.",
-                "products": [],
-            }
+            {"role": "assistant", "content": closing_text, "products": []}
+        )
+        save_message(
+            st.session_state.conversation_id, "assistant", closing_text, {"products": []}
         )
         st.session_state.session_closed = True
         st.rerun()
 
     st.session_state.messages.append({"role": "user", "content": user_input})
+    save_message(st.session_state.conversation_id, "user", user_input, {"products": []})
     with st.chat_message("user"):
         st.markdown(user_input)
 
+    refresh_system_prompt(enabled_providers)
     conversation = [
         message for message in st.session_state.messages[1:] if message.get("content")
     ]
@@ -225,11 +298,13 @@ def run_app():
                 assistant_message = response.choices[0].message
                 products = []
                 catalog_elapsed_ms = None
+                selected_providers = []
 
                 if assistant_message.tool_calls:
                     for tool_call in assistant_message.tool_calls:
                         if tool_call.function.name == "search_shopify_dynamic":
                             arguments = json.loads(tool_call.function.arguments)
+                            selected_providers = arguments.get("providers", [])
                             catalog_started = time.perf_counter()
                             products = search_shopify_dynamic(
                                 **arguments,
@@ -240,11 +315,13 @@ def run_app():
                             ) * 1000
 
                     total_elapsed_ms = (time.perf_counter() - request_started) * 1000
-
                     if products:
                         reply_text = f"Here are top matching results for **'{user_input}'**:"
                     else:
-                        reply_text = "I couldn't find matching products in the connected catalogs. Try another description or broaden your request."
+                        reply_text = (
+                            "I couldn't find matching products in the connected catalogs. "
+                            "Try another description or broaden your request."
+                        )
 
                     st.markdown(reply_text)
                     st.caption(
@@ -269,20 +346,50 @@ def run_app():
                             "products": products,
                         }
                     )
+                    save_message(
+                        st.session_state.conversation_id,
+                        "assistant",
+                        reply_text,
+                        {"products": products},
+                    )
+                    save_search(
+                        st.session_state.conversation_id,
+                        user_input,
+                        selected_providers,
+                        products,
+                    )
+                    save_agent_state(
+                        st.session_state.conversation_id,
+                        {
+                            "last_query": user_input,
+                            "last_providers": selected_providers,
+                            "last_result_count": len(products),
+                        },
+                    )
                 else:
                     total_elapsed_ms = (time.perf_counter() - request_started) * 1000
-                    reply_text = assistant_message.content
+                    reply_text = assistant_message.content or ""
                     st.markdown(reply_text)
                     st.caption(
                         f"⏱️ Response generated in **{total_elapsed_ms:,.0f} ms** "
                         f"(AI: {llm_elapsed_ms:,.0f} ms)"
                     )
                     st.session_state.messages.append(
+                        {"role": "assistant", "content": reply_text, "products": []}
+                    )
+                    save_message(
+                        st.session_state.conversation_id,
+                        "assistant",
+                        reply_text,
+                        {"products": []},
+                    )
+                    save_agent_state(
+                        st.session_state.conversation_id,
                         {
-                            "role": "assistant",
-                            "content": reply_text,
-                            "products": [],
-                        }
+                            "last_query": user_input,
+                            "last_providers": [],
+                            "last_result_count": 0,
+                        },
                     )
             except Exception as error:
                 st.error(f"Error executing search request: {error}")
