@@ -1,3 +1,4 @@
+# Pinned runtime dependencies for the Discovery Agent CI/CD pipeline.
 streamlit==1.50.0
 requests==2.32.5
 openai==2.6.1

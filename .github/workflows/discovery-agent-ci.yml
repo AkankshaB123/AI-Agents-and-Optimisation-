@@ -1,0 +1,52 @@
+name: Discovery Agent CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Discovery Agent/**"
+      - ".streamlit/**"
+      - "requirements.txt"
+      - ".github/workflows/discovery-agent-ci.yml"
+  pull_request:
+    paths:
+      - "Discovery Agent/**"
+      - ".streamlit/**"
+      - "requirements.txt"
+      - ".github/workflows/discovery-agent-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            Discovery Agent/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile application
+        run: python -m py_compile "Discovery Agent/streamlit_app.py" "Discovery Agent/discovery_appv2.py" "Discovery Agent/src/product_search.py" "Discovery Agent/src/discovery_logic.py"
+      - name: Smoke test imports and search schema
+        env:
+          PYTHONPATH: "Discovery Agent"
+        run: |
+          python - <<'PY'
+          from src.product_search import build_search_tool, get_enabled_providers
+          providers = get_enabled_providers()
+          assert "Shopify" in providers
+          tool = build_search_tool(providers)
+          assert tool["type"] == "function"
+          assert tool["function"]["name"] == "search_shopify_dynamic"
+          print("Smoke test passed:", providers)
+          PY
