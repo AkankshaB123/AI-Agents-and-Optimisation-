@@ -45,7 +45,7 @@ jobs:
           from src.product_search import build_search_tool, get_enabled_providers
           providers = get_enabled_providers()
           assert "Shopify" in providers
-          tool = build_search_tool()
+          tool = build_search_tool(providers)
           assert tool["type"] == "function"
           assert tool["function"]["name"] == "search_products"
           print("Smoke test passed:", providers)
