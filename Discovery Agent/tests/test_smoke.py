@@ -14,7 +14,7 @@ class DiscoveryAgentSmokeTests(unittest.TestCase):
         self.assertIn("Shopify", providers)
         tool = build_search_tool(providers)
         self.assertEqual(tool["type"], "function")
-        self.assertEqual(tool["function"]["name"], "search_products")
+        self.assertEqual(tool["function"]["name"], "search_shopify_dynamic")
 
     def test_required_entrypoint_exists(self):
         self.assertTrue((APP_DIR / "streamlit_app.py").is_file())
