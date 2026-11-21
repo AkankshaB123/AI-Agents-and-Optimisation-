@@ -8,6 +8,7 @@ Set DISCOVERY_DB_PATH to place the DB on a mounted/external volume in production
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import tempfile
@@ -104,6 +105,35 @@ def init_db() -> None:
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS search_embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                search_id INTEGER NOT NULL,
+                item_type TEXT NOT NULL CHECK (item_type IN ('query', 'product')),
+                item_key TEXT NOT NULL,
+                text_content TEXT NOT NULL,
+                model TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                embedding_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (search_id) REFERENCES search_history(id) ON DELETE CASCADE,
+                UNIQUE(search_id, item_type, item_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS similarity_scores (
+                search_id INTEGER NOT NULL,
+                query_embedding_id INTEGER NOT NULL,
+                product_embedding_id INTEGER NOT NULL,
+                cosine_similarity REAL NOT NULL,
+                rank INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (search_id, product_embedding_id),
+                FOREIGN KEY (search_id) REFERENCES search_history(id) ON DELETE CASCADE,
+                FOREIGN KEY (query_embedding_id) REFERENCES search_embeddings(id) ON DELETE CASCADE,
+                FOREIGN KEY (product_embedding_id) REFERENCES search_embeddings(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS agent_state (
                 conversation_id TEXT PRIMARY KEY,
                 state_json TEXT NOT NULL,
@@ -115,6 +145,10 @@ def init_db() -> None:
                 ON messages(conversation_id, id);
             CREATE INDEX IF NOT EXISTS idx_search_history_conversation
                 ON search_history(conversation_id, id);
+            CREATE INDEX IF NOT EXISTS idx_search_embeddings_search
+                ON search_embeddings(search_id, item_type);
+            CREATE INDEX IF NOT EXISTS idx_similarity_scores_search_rank
+                ON similarity_scores(search_id, rank);
             """
         )
 
@@ -259,10 +293,10 @@ def save_search(
     query: str,
     providers: list[str],
     results: list[dict[str, Any]],
-) -> None:
+) -> int:
     ensure_conversation(conversation_id)
     with connection() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO search_history(
                 conversation_id, query, providers_json, results_json, created_at
@@ -276,6 +310,93 @@ def save_search(
                 _now(),
             ),
         )
+    touch_conversation(conversation_id)
+    return int(cursor.lastrowid)
+
+
+def _embedding_json(vector: list[float]) -> str:
+    if not vector or any(
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        for value in vector
+    ):
+        raise ValueError("embedding must be a non-empty vector of finite numbers")
+    return json.dumps(vector, separators=(",", ":"), allow_nan=False)
+
+
+def save_similarity_analysis(
+    conversation_id: str,
+    search_id: int,
+    query: str,
+    query_embedding: list[float],
+    matches: list[dict[str, Any]],
+    model: str,
+) -> None:
+    """Persist one query vector, candidate vectors, and their cosine rankings."""
+    query_vector_json = _embedding_json(query_embedding)
+    now = _now()
+    with connection() as conn:
+        search = conn.execute(
+            "SELECT id FROM search_history WHERE id = ? AND conversation_id = ?",
+            (search_id, conversation_id),
+        ).fetchone()
+        if not search:
+            raise ValueError("search does not belong to the conversation")
+
+        query_cursor = conn.execute(
+            """
+            INSERT INTO search_embeddings(
+                conversation_id, search_id, item_type, item_key, text_content,
+                model, task_type, embedding_json, created_at
+            ) VALUES (?, ?, 'query', 'query', ?, ?, 'RETRIEVAL_QUERY', ?, ?)
+            """,
+            (
+                conversation_id,
+                search_id,
+                str(query)[:MAX_TEXT],
+                model,
+                query_vector_json,
+                now,
+            ),
+        )
+        query_embedding_id = int(query_cursor.lastrowid)
+
+        for match in matches:
+            product_vector_json = _embedding_json(match["embedding"])
+            product_cursor = conn.execute(
+                """
+                INSERT INTO search_embeddings(
+                    conversation_id, search_id, item_type, item_key, text_content,
+                    model, task_type, embedding_json, created_at
+                ) VALUES (?, ?, 'product', ?, ?, ?, 'RETRIEVAL_DOCUMENT', ?, ?)
+                """,
+                (
+                    conversation_id,
+                    search_id,
+                    str(match["item_key"]),
+                    str(match["text"])[:MAX_TEXT],
+                    model,
+                    product_vector_json,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO similarity_scores(
+                    search_id, query_embedding_id, product_embedding_id,
+                    cosine_similarity, rank, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    search_id,
+                    query_embedding_id,
+                    int(product_cursor.lastrowid),
+                    float(match["score"]),
+                    int(match["rank"]),
+                    now,
+                ),
+            )
     touch_conversation(conversation_id)
 
 
