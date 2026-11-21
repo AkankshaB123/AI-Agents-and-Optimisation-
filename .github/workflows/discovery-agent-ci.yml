@@ -37,16 +37,14 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Compile application
         run: python -m py_compile streamlit_app.py "Discovery Agent/streamlit_app.py" "Discovery Agent/discovery_appv2.py" "Discovery Agent/src/product_search.py" "Discovery Agent/src/discovery_logic.py"
-      - name: Smoke test imports and search schema
+      - name: Smoke test Shopify search schema
         env:
           PYTHONPATH: "Discovery Agent"
         run: |
           python - <<'PY'
-          from src.product_search import build_search_tool, get_enabled_providers
-          providers = get_enabled_providers()
-          assert "Shopify" in providers
-          tool = build_search_tool(providers)
+          from src.product_search import build_search_tool
+          tool = build_search_tool()
           assert tool["type"] == "function"
-          assert tool["function"]["name"] == "search_shopify_dynamic"
-          print("Smoke test passed:", providers)
+          assert tool["function"]["name"] == "search_shopify_catalog"
+          print("Shopify search schema smoke test passed")
           PY
