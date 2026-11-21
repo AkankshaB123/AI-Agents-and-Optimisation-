@@ -198,7 +198,7 @@ def reset_session(conversation_id: str | None = None):
     st.session_state.persistence_loaded = True
 
 
-def initialize_persistence()
+def initialize_persistence():
     """Initialize SQLite and restore a conversation from the URL when available."""
     init_db()
     if "conversation_id" in st.session_state:
@@ -234,7 +234,7 @@ def initialize_persistence()
     reset_session()
 
 
-def refresh_system_prompt()
+def refresh_system_prompt():
     st.session_state.messages[0]["content"] = SYSTEM_PROMPT.format(
         memory_context=_memory_text(st.session_state.conversation_id),
     )
