@@ -10,6 +10,7 @@ import streamlit as st
 from openai import AuthenticationError, OpenAI
 from streamlit.errors import StreamlitSecretNotFoundError
 
+from src.embeddings import EMBEDDING_MODEL, EmbeddingError, embed_search_candidates
 from src.persistence import (
     build_memory_context,
     create_conversation,
@@ -19,6 +20,7 @@ from src.persistence import (
     save_agent_state,
     save_message,
     save_search,
+    save_similarity_analysis,
 )
 from src.product_search import (
     build_search_tool,
@@ -336,7 +338,9 @@ def run_app():
                 assistant_message = response.choices[0].message
                 products = []
                 catalog_elapsed_ms = None
+                embedding_elapsed_ms = None
                 selected_providers = []
+                embedding_analysis = None
 
                 if assistant_message.tool_calls:
                     for tool_call in assistant_message.tool_calls:
@@ -351,6 +355,29 @@ def run_app():
                             catalog_elapsed_ms = (
                                 time.perf_counter() - catalog_started
                             ) * 1000
+                            embedding_started = time.perf_counter()
+                            try:
+                                query_embedding, embedding_matches = (
+                                    embed_search_candidates(
+                                        user_input, products, gemini_api_key
+                                    )
+                                )
+                                products = [
+                                    match["product"] for match in embedding_matches
+                                ]
+                                embedding_analysis = (
+                                    query_embedding,
+                                    embedding_matches,
+                                )
+                            except EmbeddingError as error:
+                                st.warning(
+                                    "Products were found, but embedding similarity "
+                                    f"could not be calculated: {error}"
+                                )
+                            finally:
+                                embedding_elapsed_ms = (
+                                    time.perf_counter() - embedding_started
+                                ) * 1000
 
                     total_elapsed_ms = (time.perf_counter() - request_started) * 1000
                     if products:
@@ -366,10 +393,16 @@ def run_app():
                         f"⏱️ Search completed in **{total_elapsed_ms:,.0f} ms** "
                         f"(AI: {llm_elapsed_ms:,.0f} ms"
                         + (
-                            f" · selected catalog(s): {catalog_elapsed_ms:,.0f} ms)"
+                            f" · catalog(s): {catalog_elapsed_ms:,.0f} ms"
                             if catalog_elapsed_ms is not None
-                            else ")"
+                            else ""
                         )
+                        + (
+                            f" · embeddings: {embedding_elapsed_ms:,.0f} ms"
+                            if embedding_elapsed_ms is not None
+                            else ""
+                        )
+                        + ")"
                     )
                     if products:
                         st.components.v1.html(
@@ -390,12 +423,27 @@ def run_app():
                         reply_text,
                         {"products": products},
                     )
-                    save_search(
+                    search_id = save_search(
                         st.session_state.conversation_id,
                         user_input,
                         selected_providers,
                         products,
                     )
+                    if embedding_analysis is not None:
+                        query_embedding, embedding_matches = embedding_analysis
+                        save_similarity_analysis(
+                            st.session_state.conversation_id,
+                            search_id,
+                            user_input,
+                            query_embedding,
+                            embedding_matches,
+                            EMBEDDING_MODEL,
+                        )
+                        st.caption(
+                            "Sorted by cosine similarity against the products returned "
+                            "by the selected catalogs; this is candidate reranking, "
+                            "not a search of the full catalog."
+                        )
                     save_agent_state(
                         st.session_state.conversation_id,
                         {
