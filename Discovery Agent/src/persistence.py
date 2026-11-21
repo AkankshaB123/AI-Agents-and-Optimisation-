@@ -10,13 +10,16 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import tempfile
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "discovery_agent.db"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+DEFAULT_DB_PATH = DATA_DIR / "chatbot.db"
+LEGACY_DB_PATH = DATA_DIR / "discovery_agent.db"
 MAX_TEXT = 12000
 MAX_JSON = 60000
 
@@ -52,6 +55,16 @@ def connection():
 
 
 def init_db() -> None:
+    db_path = _db_path()
+    if db_path == DEFAULT_DB_PATH and not db_path.exists() and LEGACY_DB_PATH.is_file():
+        source = sqlite3.connect(LEGACY_DB_PATH, timeout=10)
+        destination = sqlite3.connect(db_path, timeout=10)
+        try:
+            source.backup(destination)
+        finally:
+            source.close()
+            destination.close()
+
     with connection() as conn:
         conn.executescript(
             """
@@ -184,6 +197,29 @@ def load_messages(conversation_id: str, limit: int = 50) -> list[dict[str, Any]]
             }
         )
     return result
+
+
+def export_conversation_db(conversation_id: str) -> bytes:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        export_path = Path(temp_dir) / "chatbot.db"
+        destination = sqlite3.connect(export_path, timeout=10)
+        try:
+            with connection() as source:
+                exists = source.execute(
+                    "SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)
+                ).fetchone()
+                if not exists:
+                    raise ValueError("conversation does not exist")
+                source.backup(destination)
+
+            destination.execute("PRAGMA foreign_keys = ON")
+            destination.execute(
+                "DELETE FROM conversations WHERE id != ?", (conversation_id,)
+            )
+            destination.commit()
+        finally:
+            destination.close()
+        return export_path.read_bytes()
 
 
 def save_preferences(conversation_id: str, preferences: dict[str, Any]) -> None:
