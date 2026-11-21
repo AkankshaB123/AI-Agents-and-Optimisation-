@@ -1,6 +1,5 @@
-# Runtime dependencies for the Discovery Agent app and container.
+# Runtime dependencies for the Shopify Discovery Agent app and container.
 streamlit==1.65.0
 requests==2.32.5
 openai==2.6.1
 babel==2.17.0
-google-auth==2.41.1
