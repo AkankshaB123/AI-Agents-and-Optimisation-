@@ -132,16 +132,17 @@ def _render_chat_database(container, conversation_id: str) -> None:
     """Keep the current conversation's database download ready on the page."""
     with container.container():
         st.subheader("Conversation database")
-        if load_messages(conversation_id, limit=1):
-            st.download_button(
-                "Download this chat as chatbot.db",
-                data=export_conversation_db(conversation_id),
-                file_name="chatbot.db",
-                mime="application/vnd.sqlite3",
-                help="This file contains only the current conversation.",
-                key="download_chatbot_db",
-            )
-        else:
+        has_messages = bool(load_messages(conversation_id, limit=1))
+        st.download_button(
+            "Download this chat as chatbot.db",
+            data=export_conversation_db(conversation_id) if has_messages else b"",
+            file_name="chatbot.db",
+            mime="application/vnd.sqlite3",
+            help="This file contains only the current conversation.",
+            key="download_chatbot_db",
+            disabled=not has_messages,
+        )
+        if not has_messages:
             st.caption("Send a message to enable the database download.")
 
 
