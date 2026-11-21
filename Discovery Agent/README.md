@@ -51,6 +51,12 @@ The Streamlit UI is `streamlit_app.py`; reusable search and intent code lives un
 
 4. Open the local URL printed by Streamlit (usually `http://localhost:8501`) and enter your Google AI Studio API key in the sidebar. Keep it private; do not commit it to the repository. You can also set `GEMINI_API_KEY` in your environment or Streamlit secrets.
 
+### Chat database
+
+The app creates `data/chatbot.db` on startup and stores conversations, messages, search history, preferences, and agent state there. After a message is saved, use **Prepare this chat's database** and **Download chatbot.db** in the sidebar to download a SQLite file containing only the current conversation; this avoids exposing other shoppers' chats. Open the downloaded file with a SQLite viewer extension. The database and its journal files are ignored by Git so chat records are not committed. Set `DISCOVERY_DB_PATH` to use a different local path.
+
+The deployed Streamlit app has its own runtime filesystem; this local database will not contain conversations made on Streamlit Cloud. Cloud storage may also be ephemeral, so persistent access to deployed chat history requires a mounted persistent volume or external database.
+
 ### Run checks
 
 Install `pytest` if it is not already available, then run the unit tests and Python compilation checks:
