@@ -176,7 +176,7 @@ def _render_chat_database(container, conversation_id: str) -> None:
             st.caption("Send a message to enable the database download.")
 
 
-def reset_session(conversation_id: str | None = None)
+def reset_session(conversation_id: str | None = None):
     """Start a new conversation and keep its identifier in the URL."""
     conversation_id = conversation_id or create_conversation()
     st.session_state.conversation_id = conversation_id
