@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -69,6 +70,28 @@ class PersistenceTests(unittest.TestCase):
         self.assertIn("preferences", context)
         self.assertIn("recent_searches", context)
         self.assertIn("agent_state", context)
+
+    def test_export_contains_only_the_requested_conversation(self):
+        requested = self.persistence.create_conversation()
+        private = self.persistence.create_conversation()
+        self.persistence.save_message(requested, "user", "Find a rain jacket")
+        self.persistence.save_message(private, "user", "Find running shoes")
+
+        export_path = Path(self.tmp.name) / "export.db"
+        export_path.write_bytes(self.persistence.export_conversation_db(requested))
+        conn = sqlite3.connect(export_path)
+        try:
+            conversations = conn.execute(
+                "SELECT id FROM conversations"
+            ).fetchall()
+            messages = conn.execute(
+                "SELECT content FROM messages ORDER BY id"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(conversations, [(requested,)])
+        self.assertEqual(messages, [("Find a rain jacket",)])
 
 
 if __name__ == "__main__":
