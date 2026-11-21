@@ -1,39 +1,28 @@
 # Discovery Agent CI/CD deployment
 
-## Architecture
+GitHub is the source of truth. Pull requests run validation and tests. The repository's GitHub Actions workflow publishes the Discovery Agent container to GitHub Container Registry (GHCR) on pushes to `main` and version tags. Streamlit Community Cloud is configured to redeploy from `main` when it changes.
 
-GitHub is the source of truth. Every pull request runs the Discovery Agent CI workflow. Merges to main run the same validation and are automatically picked up by Streamlit Community Cloud for deployment.
+## Streamlit Community Cloud
 
-Streamlit Community Cloud coordinates the runtime deployment; GitHub Actions is responsible for repeatable validation before changes reach main.
+Configure the app with:
 
-## Streamlit Community Cloud settings
-
-Use these exact coordinates when creating or recreating the app:
-
-- Repository: AkankshaB123/AI-Agents-and-Optimisation-
-- Branch: main
-- Main file: Discovery Agent/streamlit_app.py
+- Repository: `AkankshaB123/AI-Agents-and-Optimisation-`
+- Branch: `main`
+- Main file: `Discovery Agent/streamlit_app.py`
 - Python: 3.11
 
-The repository now has a root requirements.txt and root .streamlit/config.toml, which removes ambiguity caused by the app living in a subdirectory.
-
-## Secrets
-
-Do not commit credentials. In Streamlit Community Cloud, add these through the app's Secrets settings:
-
-HF_TOKEN = "<your Hugging Face token>"
-
-Optional provider credentials from Discovery Agent/.env.example can be added as needed. Shopify is enabled by default and does not require a credential in this code path.
+Add `GEMINI_API_KEY` to the app's Secrets settings. This key is required for Gemini chat and embeddings. Shopify Global Catalog MCP does not require credentials. Optional market settings are `SHOPIFY_CATALOG_COUNTRY` and `SHOPIFY_CATALOG_CURRENCY`; the defaults are `US` and `USD`. `SHOPIFY_UCP_AGENT_PROFILE` can override the default hosted agent profile. Do not put credentials in the repository or container image.
 
 ## Release flow
 
-1. Create a feature branch.
-2. Open a pull request into main.
-3. GitHub Actions compiles the app and runs smoke tests.
-4. Merge only after CI is green.
-5. Streamlit Community Cloud automatically detects the main branch update and redeploys the app.
-6. Verify the app and inspect Streamlit Cloud logs if the runtime fails.
+1. Create a feature branch and open a pull request into `main`.
+2. Wait for the GitHub Actions validation and test workflows to pass; resolve any failures.
+3. Merge the reviewed pull request.
+4. On the push to `main`, GitHub Actions reruns validation and publishes the container image. Streamlit Community Cloud detects the update to `main` and redeploys.
+5. Confirm the app starts and that a search displays product results and embedding diagnostics. Inspect Streamlit Cloud logs if deployment fails.
 
-## Local validation
+## Container deployment
 
-From the repository root, install requirements, compile the four Python modules, run unittest discovery under Discovery Agent/tests, then run Streamlit with Discovery Agent/streamlit_app.py as the entrypoint.
+The repository workflow publishes images to `ghcr.io/akankshab123/discovery-agent`. Use the commit SHA or version tag for a pinned release; `latest` tracks `main`. Configure `GEMINI_API_KEY` in your container platform's secret manager.
+
+For local checks, from `Discovery Agent/` install `requirements.txt`, then run `python -m compileall -q src streamlit_app.py tests` and `python -m pytest -q`. See the [Discovery Agent README](./Discovery%20Agent/README.md) for local setup and database/embedding inspection.

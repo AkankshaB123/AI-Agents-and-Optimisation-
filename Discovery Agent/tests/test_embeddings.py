@@ -26,8 +26,8 @@ class EmbeddingTests(unittest.TestCase):
                 "title": "Trail shoe",
                 "description": "Running shoe",
                 "brand": "Shoe shop",
-                "source": "eBay",
-                "url": "https://ebay.example/shoe",
+                "source": "Shopify",
+                "url": "https://shop.example/shoe",
             },
         ]
 
