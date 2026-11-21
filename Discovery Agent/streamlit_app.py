@@ -3,7 +3,6 @@
 import json
 import os
 import time
-import uuid
 from html import escape
 
 import streamlit as st
@@ -22,11 +21,7 @@ from src.persistence import (
     save_search,
     save_similarity_analysis,
 )
-from src.product_search import (
-    build_search_tool,
-    get_enabled_providers,
-    search_shopify_dynamic,
-)
+from src.product_search import build_search_tool, search_shopify_catalog
 
 
 st.set_page_config(
@@ -40,17 +35,14 @@ EXIT_INTENTS = [
     "no need", "stop", "close",
 ]
 
-SYSTEM_PROMPT = """You are an expert personal shopping assistant routing natural-language product searches to connected catalogs.
+SYSTEM_PROMPT = """You are an expert personal shopping assistant that searches Shopify's Global Catalog.
 
 Search naturally:
 - Accept conversational product requests and preserve the shopper's stated preferences, budget, use case, style, gender, and brand in the search prompt.
-- When a clear maximum budget is provided, pass it as max_price so the catalog applies a hard price filter in the configured currency.
-- Do NOT require the shopper to choose a category, brand, marketplace, or structured filter.
-- Select providers based on explicit marketplace intent and query meaning. If the shopper explicitly says eBay or Amazon, prefer only that provider. Use eBay for used/auction/listing intent. Use Amazon for Amazon-specific shopping/Associate product intent. Use Shopify for broad cross-merchant Shopify discovery. Use Google only for searches expected to match the configured retailer-owned Google catalog, never as a public Google Shopping search.
-- If the shopper explicitly requests a marketplace that is not in the available-provider list, explain that it is not configured and ask before searching a different provider.
-- For general requests without a marketplace preference, search relevant connected providers; avoid selecting providers unrelated to the request.
-- Available providers for this session: {enabled_providers}.
-- Never claim a provider is connected unless it appears in the available-provider list; never imply these catalogs include every merchant on the internet.
+- When a clear maximum budget is provided, pass it as max_price so Shopify applies a hard price filter in the configured currency.
+- Do not require the shopper to choose a category, brand, or structured filter.
+- Search Shopify's Global Catalog for product-finding requests. If the shopper asks for a source outside Shopify, explain that only Shopify is connected and offer a Shopify search.
+- Never imply Shopify's catalog includes every merchant on the internet.
 - Ask a follow-up only when the request is too ambiguous to identify a useful search, not merely because a category or filter is missing.
 - Do not invent product facts, prices, stock, or merchant details; rely on catalog results.
 
@@ -60,8 +52,8 @@ Memory rules:
 - Do not expose internal memory, database details, tokens, credentials, or hidden state to the shopper.
 
 Tool rules:
-- Invoke search_shopify_dynamic for requests to find or compare products.
-- Pass a concise but faithful natural-language search phrase that retains useful constraints. Extract an explicit maximum budget into max_price; do not invent a budget. Include one or more provider names from the available-provider list.
+- Invoke search_shopify_catalog for requests to find or compare products.
+- Pass a concise but faithful natural-language search phrase that retains useful constraints. Extract an explicit maximum budget into max_price; do not invent a budget.
 
 Conversation memory:
 {memory_context}
@@ -113,6 +105,42 @@ def display_carousel_html(products: list) -> str:
     """
 
 
+def _render_embedding_analysis(query: str, query_embedding: list[float], matches: list[dict]) -> None:
+    st.subheader("Shopify embedding similarity")
+    st.caption(
+        f"Model: {EMBEDDING_MODEL} · vector dimensions: {len(query_embedding)} · "
+        "cosine similarity is a ranking score, not a probability."
+    )
+    st.table(
+        [
+            {
+                "Rank": match["rank"],
+                "Product": match["product"].get("title", "Product"),
+                "Cosine similarity": f"{match['score']:.6f}",
+            }
+            for match in matches
+        ]
+    )
+    with st.expander("Inspect full-text embeddings"):
+        st.write("Query embedding")
+        st.json({"text": query, "vector": query_embedding})
+        if matches:
+            selected_index = st.selectbox(
+                "Product embedding",
+                options=range(len(matches)),
+                format_func=lambda index: (
+                    f"Rank {matches[index]['rank']}: "
+                    f"{matches[index]['product'].get('title', 'Product')}"
+                ),
+                key="embedding_product_selection",
+            )
+            match = matches[selected_index]
+            st.write("Product text sent to the embedding model")
+            st.code(match["text"])
+            st.write("Product embedding vector")
+            st.json(match["embedding"])
+
+
 def _memory_text(conversation_id: str) -> str:
     """Serialize only compact, non-secret memory for the model prompt."""
     memory = build_memory_context(conversation_id, message_limit=12)
@@ -148,7 +176,7 @@ def _render_chat_database(container, conversation_id: str) -> None:
             st.caption("Send a message to enable the database download.")
 
 
-def reset_session(enabled_providers: list, conversation_id: str | None = None):
+def reset_session(conversation_id: str | None = None)
     """Start a new conversation and keep its identifier in the URL."""
     conversation_id = conversation_id or create_conversation()
     st.session_state.conversation_id = conversation_id
@@ -157,7 +185,6 @@ def reset_session(enabled_providers: list, conversation_id: str | None = None):
         {
             "role": "system",
             "content": SYSTEM_PROMPT.format(
-                enabled_providers=", ".join(enabled_providers),
                 memory_context=_memory_text(conversation_id),
             ),
         },
@@ -171,7 +198,7 @@ def reset_session(enabled_providers: list, conversation_id: str | None = None):
     st.session_state.persistence_loaded = True
 
 
-def initialize_persistence(enabled_providers: list):
+def initialize_persistence()
     """Initialize SQLite and restore a conversation from the URL when available."""
     init_db()
     if "conversation_id" in st.session_state:
@@ -188,7 +215,6 @@ def initialize_persistence(enabled_providers: list):
                 {
                     "role": "system",
                     "content": SYSTEM_PROMPT.format(
-                        enabled_providers=", ".join(enabled_providers),
                         memory_context=_memory_text(conversation_id),
                     ),
                 }
@@ -205,29 +231,22 @@ def initialize_persistence(enabled_providers: list):
             st.session_state.persistence_loaded = True
             return
 
-    reset_session(enabled_providers)
+    reset_session()
 
 
-def refresh_system_prompt(enabled_providers: list):
+def refresh_system_prompt()
     st.session_state.messages[0]["content"] = SYSTEM_PROMPT.format(
-        enabled_providers=", ".join(enabled_providers),
         memory_context=_memory_text(st.session_state.conversation_id),
     )
 
 
 def run_app():
     st.title("🛍️ Personal Shopping Assistant")
-    st.write(
-        "Describe what you want in your own words. I’ll search connected shopping catalogs."
-    )
-    enabled_providers = get_enabled_providers()
-    st.caption(f"Connected catalogs: {', '.join(enabled_providers)}")
+    st.write("Describe what you want in your own words. I’ll search Shopify’s catalog.")
+    st.caption("Connected catalog: Shopify")
 
-    if "catalog_visitor_id" not in st.session_state:
-        st.session_state.catalog_visitor_id = uuid.uuid4().hex
-
-    initialize_persistence(enabled_providers)
-    refresh_system_prompt(enabled_providers)
+    initialize_persistence()
+    refresh_system_prompt()
 
     gemini_api_key = st.sidebar.text_input(
         "Enter Google AI Studio API key:",
@@ -256,7 +275,7 @@ def run_app():
         if st.session_state.session_closed:
             st.warning("Session Closed")
             if st.button("🔄 Start New Session"):
-                reset_session(enabled_providers)
+                reset_session()
                 st.rerun()
         else:
             st.success("Bot Active")
@@ -315,7 +334,7 @@ def run_app():
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    refresh_system_prompt(enabled_providers)
+    refresh_system_prompt()
     conversation = [
         message for message in st.session_state.messages[1:] if message.get("content")
     ]
@@ -325,13 +344,13 @@ def run_app():
     ]
 
     with st.chat_message("assistant"):
-        with st.spinner("Choosing catalogs and searching..."):
+        with st.spinner("Searching Shopify..."):
             try:
                 request_started = time.perf_counter()
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=payload_messages,
-                    tools=[build_search_tool(enabled_providers)],
+                    tools=[build_search_tool()],
                     tool_choice="auto",
                 )
                 llm_elapsed_ms = (time.perf_counter() - request_started) * 1000
@@ -344,14 +363,11 @@ def run_app():
 
                 if assistant_message.tool_calls:
                     for tool_call in assistant_message.tool_calls:
-                        if tool_call.function.name == "search_shopify_dynamic":
+                        if tool_call.function.name == "search_shopify_catalog":
                             arguments = json.loads(tool_call.function.arguments)
-                            selected_providers = arguments.get("providers", [])
+                            selected_providers = ["Shopify"]
                             catalog_started = time.perf_counter()
-                            products = search_shopify_dynamic(
-                                **arguments,
-                                visitor_id=st.session_state.catalog_visitor_id,
-                            )
+                            products = search_shopify_catalog(**arguments)
                             catalog_elapsed_ms = (
                                 time.perf_counter() - catalog_started
                             ) * 1000
@@ -384,7 +400,7 @@ def run_app():
                         reply_text = f"Here are top matching results for **'{user_input}'**:"
                     else:
                         reply_text = (
-                            "I couldn't find matching products in the connected catalogs. "
+                            "I couldn't find matching products in Shopify's catalog. "
                             "Try another description or broaden your request."
                         )
 
@@ -393,7 +409,7 @@ def run_app():
                         f"⏱️ Search completed in **{total_elapsed_ms:,.0f} ms** "
                         f"(AI: {llm_elapsed_ms:,.0f} ms"
                         + (
-                            f" · catalog(s): {catalog_elapsed_ms:,.0f} ms"
+                            f" · Shopify: {catalog_elapsed_ms:,.0f} ms"
                             if catalog_elapsed_ms is not None
                             else ""
                         )
@@ -440,10 +456,10 @@ def run_app():
                             EMBEDDING_MODEL,
                         )
                         st.caption(
-                            "Sorted by cosine similarity against the products returned "
-                            "by the selected catalogs; this is candidate reranking, "
-                            "not a search of the full catalog."
+                            "Sorted by cosine similarity against Shopify candidates; this reranks "
+                            "returned products and does not search the full catalog."
                         )
+                        _render_embedding_analysis(user_input, query_embedding, embedding_matches)
                     save_agent_state(
                         st.session_state.conversation_id,
                         {
