@@ -13,6 +13,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 from src.persistence import (
     build_memory_context,
     create_conversation,
+    export_conversation_db,
     init_db,
     load_messages,
     save_agent_state,
@@ -214,6 +215,35 @@ def run_app():
         type="password",
         key="gemini_api_key_input",
     )
+    conversation_id = st.session_state.conversation_id
+    with st.sidebar:
+        st.subheader("Chat database")
+        stored_messages = load_messages(conversation_id, limit=200)
+        if stored_messages:
+            if st.button(
+                "Prepare this chat's database",
+                key="prepare_chatbot_db",
+            ):
+                st.session_state.chatbot_db_export = export_conversation_db(
+                    conversation_id
+                )
+                st.session_state.chatbot_db_export_conversation_id = conversation_id
+            if (
+                st.session_state.get("chatbot_db_export_conversation_id")
+                == conversation_id
+                and st.session_state.get("chatbot_db_export") is not None
+            ):
+                st.download_button(
+                    "Download chatbot.db",
+                    data=st.session_state.chatbot_db_export,
+                    file_name="chatbot.db",
+                    mime="application/vnd.sqlite3",
+                    help="This file contains only the current conversation.",
+                    key="download_chatbot_db",
+                )
+        else:
+            st.caption("Send a message to enable the database download.")
+
     if not gemini_api_key:
         st.warning(
             "🔑 Please enter your Google AI Studio API key in the sidebar to start the chat session."
@@ -263,6 +293,9 @@ def run_app():
     )
     if not user_input:
         return
+
+    st.session_state.pop("chatbot_db_export", None)
+    st.session_state.pop("chatbot_db_export_conversation_id", None)
 
     cleaned_input = user_input.strip().lower()
     if any(intent in cleaned_input for intent in EXIT_INTENTS):
