@@ -128,6 +128,23 @@ def _configured_gemini_api_key() -> str:
         return ""
 
 
+def _render_chat_database(container, conversation_id: str) -> None:
+    """Keep the current conversation's database download ready on the page."""
+    with container.container():
+        st.subheader("Conversation database")
+        if load_messages(conversation_id, limit=1):
+            st.download_button(
+                "Download this chat as chatbot.db",
+                data=export_conversation_db(conversation_id),
+                file_name="chatbot.db",
+                mime="application/vnd.sqlite3",
+                help="This file contains only the current conversation.",
+                key="download_chatbot_db",
+            )
+        else:
+            st.caption("Send a message to enable the database download.")
+
+
 def reset_session(enabled_providers: list, conversation_id: str | None = None):
     """Start a new conversation and keep its identifier in the URL."""
     conversation_id = conversation_id or create_conversation()
@@ -216,35 +233,10 @@ def run_app():
         key="gemini_api_key_input",
     )
     conversation_id = st.session_state.conversation_id
-    with st.sidebar:
-        st.subheader("Chat database")
-        stored_messages = load_messages(conversation_id, limit=200)
-        if stored_messages:
-            if st.button(
-                "Prepare this chat's database",
-                key="prepare_chatbot_db",
-            ):
-                st.session_state.chatbot_db_export = export_conversation_db(
-                    conversation_id
-                )
-                st.session_state.chatbot_db_export_conversation_id = conversation_id
-            if (
-                st.session_state.get("chatbot_db_export_conversation_id")
-                == conversation_id
-                and st.session_state.get("chatbot_db_export") is not None
-            ):
-                st.download_button(
-                    "Download chatbot.db",
-                    data=st.session_state.chatbot_db_export,
-                    file_name="chatbot.db",
-                    mime="application/vnd.sqlite3",
-                    help="This file contains only the current conversation.",
-                    key="download_chatbot_db",
-                )
-        else:
-            st.caption("Send a message to enable the database download.")
+    database_download = st.empty()
 
     if not gemini_api_key:
+        _render_chat_database(database_download, conversation_id)
         st.warning(
             "🔑 Please enter your Google AI Studio API key in the sidebar to start the chat session."
         )
@@ -270,6 +262,7 @@ def run_app():
                 st.rerun()
 
     if st.session_state.session_closed:
+        _render_chat_database(database_download, conversation_id)
         st.info("👋 **Session Ended.** Your chat session is closed.")
         st.write(
             "To start a new session, re-open the Streamlit link or click **Start New Session**."
@@ -292,10 +285,8 @@ def run_app():
         "Describe what you need (e.g., 'a lightweight rain jacket for hiking under $100')..."
     )
     if not user_input:
+        _render_chat_database(database_download, conversation_id)
         return
-
-    st.session_state.pop("chatbot_db_export", None)
-    st.session_state.pop("chatbot_db_export_conversation_id", None)
 
     cleaned_input = user_input.strip().lower()
     if any(intent in cleaned_input for intent in EXIT_INTENTS):
@@ -445,6 +436,8 @@ def run_app():
                 )
             except Exception as error:
                 st.error(f"Error executing search request: {error}")
+
+    _render_chat_database(database_download, conversation_id)
 
 
 if __name__ == "__main__":
