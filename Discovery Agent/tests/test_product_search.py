@@ -1,4 +1,4 @@
-import product_search
+from src import product_search
 
 
 class FakeResponse:
