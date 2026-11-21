@@ -7,7 +7,8 @@ import uuid
 from html import escape
 
 import streamlit as st
-from openai import OpenAI
+from openai import AuthenticationError, OpenAI
+from streamlit.errors import StreamlitSecretNotFoundError
 
 from src.persistence import (
     build_memory_context,
@@ -29,7 +30,8 @@ st.set_page_config(
     page_title="Shopify Discovery Assistant", page_icon="🛍️", layout="wide"
 )
 
-MODEL_NAME = "meta-llama/Llama-3.3-70B-Instruct:novita"
+MODEL_NAME = "gemini-3.5-flash-lite"
+GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 EXIT_INTENTS = [
     "exit", "quit", "bye", "goodbye", "good bye", "no need now",
     "no need", "stop", "close",
@@ -114,6 +116,17 @@ def _memory_text(conversation_id: str) -> str:
     return json.dumps(memory, ensure_ascii=False, default=str)[:18000]
 
 
+def _configured_gemini_api_key() -> str:
+    """Read the Gemini API key from runtime environment or Streamlit secrets."""
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if api_key:
+        return api_key
+    try:
+        return str(st.secrets.get("GEMINI_API_KEY", "")).strip()
+    except StreamlitSecretNotFoundError:
+        return ""
+
+
 def reset_session(enabled_providers: list, conversation_id: str | None = None):
     """Start a new conversation and keep its identifier in the URL."""
     conversation_id = conversation_id or create_conversation()
@@ -195,21 +208,21 @@ def run_app():
     initialize_persistence(enabled_providers)
     refresh_system_prompt(enabled_providers)
 
-    hf_token = st.sidebar.text_input(
-        "Enter Hugging Face Token:",
-        value=os.getenv("HF_TOKEN", ""),
+    gemini_api_key = st.sidebar.text_input(
+        "Enter Google AI Studio API key:",
+        value=_configured_gemini_api_key(),
         type="password",
-        key="hf_token_input",
+        key="gemini_api_key_input",
     )
-    if not hf_token:
+    if not gemini_api_key:
         st.warning(
-            "🔑 Please enter your Hugging Face Token in the sidebar to start the chat session."
+            "🔑 Please enter your Google AI Studio API key in the sidebar to start the chat session."
         )
         return
 
     client = OpenAI(
-        base_url="https://router.huggingface.co/v1",
-        api_key=hf_token,
+        base_url=GEMINI_OPENAI_BASE_URL,
+        api_key=gemini_api_key,
     )
 
     with st.sidebar:
@@ -391,6 +404,12 @@ def run_app():
                             "last_result_count": 0,
                         },
                     )
+            except AuthenticationError:
+                st.error(
+                    "Google Gemini rejected the API key (HTTP 401). Check the "
+                    "GEMINI_API_KEY secret in Streamlit Cloud or enter a valid "
+                    "Google AI Studio API key."
+                )
             except Exception as error:
                 st.error(f"Error executing search request: {error}")
 
