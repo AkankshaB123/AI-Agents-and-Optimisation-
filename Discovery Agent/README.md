@@ -53,7 +53,7 @@ The Streamlit UI is `streamlit_app.py`; reusable search and intent code lives un
 
 ### Chat database
 
-The app creates `data/chatbot.db` on startup and stores conversations, messages, search history, preferences, and agent state there. After a message is saved, use **Prepare this chat's database** and **Download chatbot.db** in the sidebar to download a SQLite file containing only the current conversation; this avoids exposing other shoppers' chats. Open the downloaded file with a SQLite viewer extension. The database and its journal files are ignored by Git so chat records are not committed. Set `DISCOVERY_DB_PATH` to use a different local path.
+The app creates `data/chatbot.db` on startup and stores conversations, messages, search history, preferences, and agent state there. After a message is saved, use **Download this chat as chatbot.db** on the main page to download a SQLite file containing only the current conversation; this avoids exposing other shoppers' chats. Open the downloaded file with a SQLite viewer extension. The database and its journal files are ignored by Git so chat records are not committed. Set `DISCOVERY_DB_PATH` to use a different local path.
 
 The deployed Streamlit app has its own runtime filesystem; this local database will not contain conversations made on Streamlit Cloud. Cloud storage may also be ephemeral, so persistent access to deployed chat history requires a mounted persistent volume or external database.
 
