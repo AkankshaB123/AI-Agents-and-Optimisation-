@@ -55,6 +55,22 @@ The Streamlit UI is `streamlit_app.py`; reusable search and intent code lives un
 
 The app creates `data/chatbot.db` on startup and stores conversations, messages, search history, preferences, and agent state there. After a message is saved, use **Download this chat as chatbot.db** on the main page to download a SQLite file containing only the current conversation; this avoids exposing other shoppers' chats. Open the downloaded file with a SQLite viewer extension. The database and its journal files are ignored by Git so chat records are not committed. Set `DISCOVERY_DB_PATH` to use a different local path.
 
+### Query-to-product embedding matches
+
+For each successful product search, the app embeds the user's query and the products returned by the selected provider with Google's `gemini-embedding-001` model. It compares the query vector with each returned product's title, brand, and description vector using cosine similarity, then ranks those candidates by score. The vectors and scores are stored in `search_embeddings` and `similarity_scores`, linked to `search_history`. A higher cosine score means the vectors point in a more similar direction; it is not a probability. This is candidate reranking only: Shopify's hosted search first returns candidates, and this app does not have or index the full Shopify catalog. These are whole-text embeddings, not per-token embeddings; generating them uses the configured Gemini API key and is subject to that API's limits.
+
+To inspect stored matches in SQLite:
+
+```sql
+SELECT h.query, p.text_content AS product, s.cosine_similarity, s.rank
+FROM similarity_scores AS s
+JOIN search_history AS h ON h.id = s.search_id
+JOIN search_embeddings AS p ON p.id = s.product_embedding_id
+ORDER BY h.id DESC, s.rank;
+```
+
+The full query and product vectors are in `search_embeddings.embedding_json`.
+
 The deployed Streamlit app has its own runtime filesystem; this local database will not contain conversations made on Streamlit Cloud. Cloud storage may also be ephemeral, so persistent access to deployed chat history requires a mounted persistent volume or external database.
 
 ### Run checks
