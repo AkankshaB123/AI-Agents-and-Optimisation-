@@ -1,11 +1,11 @@
 # Shopify Discovery Assistant — System Design Architecture
 
 ## Executive Summary
-The **Shopify Discovery Assistant** uses an LLM (Llama 3.3 70B via Hugging Face Router) to understand conversational product requests and searches Shopify's Global Catalog MCP (UCP), plus optional eBay and Amazon catalogs when their credentials are configured.
+The **Shopify Discovery Assistant** uses an LLM (Google Gemini 3.5 Flash-Lite via Google AI Studio) to understand conversational product requests and searches Shopify's Global Catalog MCP (UCP), plus optional eBay and Amazon catalogs when their credentials are configured.
 
 ## Live dashboard
 
-Open the deployed [Shopify Discovery Assistant dashboard](https://ksjamznbsx6brz9rtobt8i.streamlit.app/). The app may take a short time to wake up if it has been idle. Enter a Hugging Face access token in the sidebar to start chatting. Describe what you want conversationally; categories and structured filters are optional. eBay and Amazon appear in results only after their server-side credentials are configured.
+Open the deployed [Shopify Discovery Assistant dashboard](https://ksjamznbsx6brz9rtobt8i.streamlit.app/). The app may take a short time to wake up if it has been idle. Configure a Google AI Studio API key as the Streamlit secret `GEMINI_API_KEY`, or enter it in the sidebar, to start chatting. Gemini free-tier quotas and data-use terms apply. Describe what you want conversationally; categories and structured filters are optional. eBay and Amazon appear in results only after their server-side credentials are configured.
 
 Browse the project files on [GitHub](https://github.com/AkankshaB123/AI-Agents-and-Optimisation-/tree/main/Discovery%20Agent).
 
@@ -49,7 +49,7 @@ The Streamlit UI is `streamlit_app.py`; reusable search and intent code lives un
       streamlit run streamlit_app.py
       ```
 
-4. Open the local URL printed by Streamlit (usually `http://localhost:8501`) and enter your Hugging Face token in the sidebar. Keep the token private; do not commit it to the repository. You can also set `HF_TOKEN` in your environment before launching.
+4. Open the local URL printed by Streamlit (usually `http://localhost:8501`) and enter your Google AI Studio API key in the sidebar. Keep it private; do not commit it to the repository. You can also set `GEMINI_API_KEY` in your environment or Streamlit secrets.
 
 ### Run checks
 
@@ -61,11 +61,11 @@ python -m compileall -q src streamlit_app.py tests
 python -m pytest -q
 ```
 
-The tests cover MCP request construction and catalog result normalization. Live product searches also require a valid Hugging Face token and network access to the Hugging Face Router and Shopify Global Catalog MCP.
+The tests cover MCP request construction and catalog result normalization. Live product searches also require a valid `GEMINI_API_KEY` and network access to Google's Gemini API and Shopify Global Catalog MCP.
 
 ### Search latency
 
-After each chat response, the UI shows the measured end-to-end time in milliseconds, with the AI request and selected catalog search time split out when a search tool runs. In a small three-query Shopify MCP smoke test on October 3, 2026, catalog requests took **556–2,130 ms** (median **626 ms**); the first request was the slowest. Treat this only as a rough, environment-specific baseline—not a latency guarantee. Cold starts, Hugging Face model response time, network conditions, enabled provider count, and each marketplace's API can increase total response time. When multiple providers are selected, their searches run in parallel, so catalog time is approximately the slowest selected provider, plus orchestration overhead.
+After each chat response, the UI shows the measured end-to-end time in milliseconds, with the AI request and selected catalog search time split out when a search tool runs. In a small three-query Shopify MCP smoke test on October 3, 2026, catalog requests took **556–2,130 ms** (median **626 ms**); the first request was the slowest. Treat this only as a rough, environment-specific baseline—not a latency guarantee. Cold starts, Gemini model response time, network conditions, enabled provider count, and each marketplace's API can increase total response time. When multiple providers are selected, their searches run in parallel, so catalog time is approximately the slowest selected provider, plus orchestration overhead.
 
 ---
 
@@ -74,7 +74,7 @@ After each chat response, the UI shows the measured end-to-end time in milliseco
 The system uses Streamlit for UI and session orchestration, a hosted LLM for conversational intent, and Shopify Global Catalog MCP for cross-merchant product discovery.
 
 ```
-[ Streamlit UI ] -> [ Llama 3.3 intent + optional budget extraction ]
+[ Streamlit UI ] -> [ Gemini 3.5 Flash-Lite intent + optional budget extraction ]
                            |
                            v
                 [ Shopify Global Catalog MCP / UCP ]
@@ -88,7 +88,7 @@ The system uses Streamlit for UI and session orchestration, a hosted LLM for con
 ## 2. Core Component Breakdown
 
 * **Natural-language intent parsing**: The model retains the shopper's free-text constraints (budget, activity, style, gender, or brand) without making category selection mandatory.
-* **LLM Agent & Tool Calling (*Dynamic*)**: Employs Hugging Face Router with `Llama-3.3-70B-Instruct` and calls the catalog search tool with the shopper's natural-language request.
+* **LLM Agent & Tool Calling (*Dynamic*)**: Employs Google's OpenAI-compatible Gemini API with `gemini-3.5-flash-lite` and calls the catalog search tool with the shopper's natural-language request.
 * **Global Catalog MCP**: Sends a single UCP-compatible MCP `search_catalog` request to Shopify's Global Catalog endpoint. Results span eligible Shopify merchants and include seller, variant, availability, price, media, and product links.
 
 ---
@@ -97,7 +97,7 @@ The system uses Streamlit for UI and session orchestration, a hosted LLM for con
 
 ```
 [ Shopper's natural-language request ]
-      -> [ Llama 3.3: retains intent and extracts an explicit max budget ]
+      -> [ Gemini 3.5 Flash-Lite: retains intent and extracts an explicit max budget ]
       -> [ Shopify Global Catalog MCP / UCP: search_catalog ]
       -> [ Normalize seller offers, currency, availability, and product links ]
       -> [ Render product cards ]
@@ -151,7 +151,7 @@ The app can route natural-language product requests to Shopify Global Catalog, e
 
 The repository-root [GitHub Actions workflow](../.github/workflows/discovery-agent.yml) validates Python syntax, lint, and unit tests for pull requests and pushes. On pushes to `main` and version tags (`v*`), it builds the Streamlit container and publishes commit-, release-, and (on `main`) `latest`-tagged images to GitHub Container Registry (GHCR).
 
-The Llama model is served remotely through the Hugging Face Router; this repository does not train or package model weights. Product discovery uses Shopify's Global Catalog MCP endpoint (`https://catalog.shopify.com/api/ucp/mcp`), optional eBay Browse and Amazon Creators APIs, and (only when configured) Vertex AI Search for commerce over your own Google catalog. The LLM chooses providers based on query intent, from only those enabled in deployment configuration. The pipeline versions and delivers the application container. Configure API credentials as server-side secrets; never commit them or expose them in the browser. Configure `HF_TOKEN` as a runtime secret; the app also supports entering it in the sidebar for local interactive use. Set `SHOPIFY_CATALOG_COUNTRY` and `SHOPIFY_CATALOG_CURRENCY` to change the default market (`US`/`USD`); `SHOPIFY_UCP_AGENT_PROFILE` can override the example profile with an agent profile you host.
+Gemini 3.5 Flash-Lite is served remotely through Google's OpenAI-compatible API; this repository does not train or package model weights. Product discovery uses Shopify's Global Catalog MCP endpoint (`https://catalog.shopify.com/api/ucp/mcp`), optional eBay Browse and Amazon Creators APIs, and (only when configured) Vertex AI Search for commerce over your own Google catalog. The LLM chooses providers based on query intent, from only those enabled in deployment configuration. The pipeline versions and delivers the application container. Configure API credentials as server-side secrets; never commit them or expose them in the browser. Configure `GEMINI_API_KEY` as a runtime secret; the app also supports entering it in the sidebar for local interactive use. Set `SHOPIFY_CATALOG_COUNTRY` and `SHOPIFY_CATALOG_CURRENCY` to change the default market (`US`/`USD`); `SHOPIFY_UCP_AGENT_PROFILE` can override the example profile with an agent profile you host.
 
 ### Optional marketplace setup
 
@@ -170,9 +170,9 @@ Compatibility launchers named `discovery_appv2.py` remain at the repository root
 
 ### Run locally with Docker
 
-Build the image with `docker build -t discovery-assistant .`, then start it with `docker run --rm -p 8501:8501 -e HF_TOKEN="$HF_TOKEN" discovery-assistant`. Open `http://localhost:8501`.
+Build the image with `docker build -t discovery-assistant .`, then start it with `docker run --rm -p 8501:8501 -e GEMINI_API_KEY="$GEMINI_API_KEY" discovery-assistant`. Open `http://localhost:8501`.
 
-For deployment, pull the published image `ghcr.io/akankshab123/discovery-agent:<tag>` into your container platform and inject `HF_TOKEN` through that platform's secret manager. Do not put tokens in the image or commit them to the repository.
+For deployment, pull the published image `ghcr.io/akankshab123/discovery-agent:<tag>` into your container platform and inject `GEMINI_API_KEY` through that platform's secret manager. Do not put tokens in the image or commit them to the repository.
 
 ## What Google offers
 
